@@ -27,6 +27,11 @@ let state = null;
 let busy = false;
 let lastOverlayKey = '';
 
+const floaters = [];
+let shake = 0;
+let hurtFlash = 0;
+let lastTime = 0;
+
 /* ---------------- 启动 ---------------- */
 
 function fit() {
@@ -60,7 +65,10 @@ async function boot() {
   requestAnimationFrame(loop);
 }
 
-function loop() {
+function loop(now) {
+  const dt = lastTime ? Math.min(0.05, (now - lastTime) / 1000) : 0.016;
+  lastTime = now;
+  updateFx(dt);
   draw();
   requestAnimationFrame(loop);
 }
@@ -89,9 +97,114 @@ async function post(path, body) {
 
 function setState(next) {
   state = next;
+  if (next && Array.isArray(next.events) && next.events.length) consumeEvents(next.events);
   updateHud();
   updateOverlay();
   draw();
+}
+
+/* ---------------- 表现层：音效 / 飘字 / 震屏 ---------------- */
+
+function consumeEvents(events) {
+  for (const ev of events) handleEvent(ev);
+}
+
+function handleEvent(ev) {
+  switch (ev.type) {
+    case 'swing':
+      Sound.play('swing');
+      break;
+    case 'hit':
+      Sound.play(ev.crit ? 'crit' : 'hit');
+      addFloater(
+        ev.x,
+        ev.y,
+        ev.crit ? `${ev.dmg}!` : String(ev.dmg),
+        ev.crit ? '#ffd45e' : '#f4f4f8',
+        ev.crit ? 16 : 11,
+      );
+      if (ev.crit) kick(7);
+      break;
+    case 'kill':
+      Sound.play(ev.boss || ev.final ? 'bossDown' : 'kill');
+      break;
+    case 'playerHit':
+      Sound.play('hurt');
+      addFloater(ev.x, ev.y, `-${ev.dmg}`, '#ff6b6b', 14);
+      kick(Math.min(9, 3 + ev.dmg * 0.25));
+      hurtFlash = 1;
+      break;
+    case 'heal':
+      Sound.play('heal');
+      addFloater(ev.x, ev.y, `+${ev.amount}`, '#7ee08a', 13);
+      break;
+    case 'levelup':
+      Sound.play('levelup');
+      addFloater(ev.x, ev.y, `Lv.${ev.level}`, '#8fd4ff', 14);
+      break;
+    case 'pickup':
+      Sound.playPickup(ev.kind);
+      if (ev.kind === 'gold') addFloater(ev.x, ev.y, `+${ev.amount}`, '#ffd45e', 11);
+      else if (ev.kind === 'potion') addFloater(ev.x, ev.y, '药水', '#8fd4ff', 11);
+      else if (ev.kind === 'revive') addFloater(ev.x, ev.y, '护符', '#ff9ad5', 12);
+      else if (ev.kind === 'chest') addFloater(ev.x, ev.y, '换武器', '#c9a7ff', 11);
+      break;
+    case 'stairs':
+      Sound.play('stairs');
+      break;
+    case 'secret':
+      Sound.play('secret');
+      addFloater(ev.x, ev.y, '裂墙！', '#c9a7ff', 12);
+      kick(5);
+      break;
+    case 'summon':
+      Sound.play('summon');
+      kick(6);
+      break;
+    case 'revive':
+      Sound.play('revive');
+      addFloater(ev.x, ev.y, '复活', '#ffd45e', 16);
+      break;
+    case 'upgrade':
+      Sound.play('upgrade');
+      break;
+    case 'win':
+      Sound.play('win');
+      break;
+    case 'dead':
+      Sound.play('dead');
+      kick(8);
+      break;
+    default:
+      break;
+  }
+}
+
+function addFloater(wx, wy, text, color, size) {
+  if (typeof wx !== 'number' || typeof wy !== 'number') return;
+  floaters.push({
+    wx: wx + (Math.random() - 0.5) * 0.24,
+    wy,
+    text,
+    color,
+    size: size || 11,
+    life: 0.95,
+    max: 0.95,
+  });
+  if (floaters.length > 40) floaters.shift();
+}
+
+function kick(power) {
+  shake = Math.max(shake, power);
+}
+
+function updateFx(dt) {
+  if (shake > 0) shake = Math.max(0, shake - dt * 55);
+  if (hurtFlash > 0) hurtFlash = Math.max(0, hurtFlash - dt * 2.6);
+  for (let i = floaters.length - 1; i >= 0; i--) {
+    floaters[i].life -= dt;
+    if (floaters[i].life <= 0) floaters.splice(i, 1);
+  }
 }
 
 /* ---------------- 绘制 ---------------- */
@@ -134,6 +247,11 @@ function draw() {
   const mapH = state.mapH;
   const camX = Math.round(clamp(p.x - VIEW_W / 2 + 0.5, 0, Math.max(0, mapW - VIEW_W)));
   const camY = Math.round(clamp(p.y - VIEW_H / 2 + 0.5, 0, Math.max(0, mapH - VIEW_H)));
+
+  ctx.save();
+  if (shake > 0.4) {
+    ctx.translate((Math.random() - 0.5) * shake * 1.6, (Math.random() - 0.5) * shake * 1.6);
+  }
 
   // 地形
   for (let vy = 0; vy < VIEW_H; vy++) {
@@ -217,6 +335,39 @@ function draw() {
     const py = (p.y - camY) * TILE + 1;
     ctx.strokeRect(px, py, TILE - 2, TILE - 2);
   }
+
+  ctx.restore();
+
+  drawFloaters(camX, camY);
+  drawHurtFlash();
+}
+
+function drawFloaters(camX, camY) {
+  if (!floaters.length) return;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (const f of floaters) {
+    const sx = (f.wx - camX) * TILE + TILE / 2;
+    const t = 1 - f.life / f.max;
+    const sy = (f.wy - camY) * TILE + TILE / 2 - 4 - t * 18;
+    const alpha = f.life > f.max * 0.65 ? 1 : f.life / (f.max * 0.65);
+    ctx.globalAlpha = Math.max(0, alpha);
+    ctx.font = `bold ${f.size}px ui-monospace, Consolas, monospace`;
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+    ctx.strokeText(f.text, sx, sy);
+    ctx.fillStyle = f.color;
+    ctx.fillText(f.text, sx, sy);
+  }
+  ctx.globalAlpha = 1;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+}
+
+function drawHurtFlash() {
+  if (hurtFlash <= 0) return;
+  ctx.fillStyle = `rgba(196,32,52,${(0.2 * hurtFlash).toFixed(3)})`;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
 }
 
 /* ---------------- HUD ---------------- */
@@ -247,7 +398,7 @@ function updateHud() {
   goldLabel.textContent = `金币 ${p.gold}`;
   crystalLabel.textContent = `晶石 ${state.meta.crystals}`;
 
-  const lines = (state.log || []).slice(-6);
+  const lines = (state.log || []).slice(-5);
   logEl.innerHTML = lines.map((l) => `<div>${escapeHtml(l)}</div>`).join('');
 
   const crit = Math.round(p.crit * 100);
@@ -383,6 +534,7 @@ function winHtml() {
 }
 
 overlay.addEventListener('click', (ev) => {
+  Sound.unlock();
   const btn = ev.target.closest('[data-act]');
   if (!btn) return;
   const act = btn.dataset.act;
@@ -410,6 +562,7 @@ const ATTACK_KEYS = {
 document.addEventListener('keydown', (ev) => {
   if (ev.isComposing) return;
   if (ev.key.startsWith('Arrow') || ev.key === ' ') ev.preventDefault();
+  Sound.unlock();
   if (!state) return;
 
   if (state.pending) {
@@ -433,6 +586,8 @@ document.addEventListener('keydown', (ev) => {
     post('/api/action', { action: { type: 'attack', dx: ATTACK_KEYS[ev.key][0], dy: ATTACK_KEYS[ev.key][1] } });
   } else if (k === 'q') {
     post('/api/action', { action: { type: 'potion' } });
+  } else if (k === 'm') {
+    Sound.toggle();
   } else if (ev.key === ' ') {
     post('/api/action', { action: { type: 'wait' } });
   }

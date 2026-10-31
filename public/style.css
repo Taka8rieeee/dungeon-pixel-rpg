@@ -114,8 +114,9 @@ body {
 
 #stats {
   position: absolute;
-  left: 0.7em;
-  bottom: 5.9em;
+  right: 0.7em;
+  bottom: 0.6em;
+  text-align: right;
   font-size: 0.78em;
   line-height: 1.5;
   color: #9a9ab4;
@@ -127,7 +128,7 @@ body {
 #log {
   position: absolute;
   left: 0.7em;
-  right: 0.7em;
+  right: 19em;
   bottom: 0.6em;
   display: flex;
   flex-direction: column;

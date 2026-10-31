@@ -51,6 +51,7 @@ class Game {
     this.depth = 1;
     this.turn = 0;
     this.bossSummoned = false;
+    this.events = [];
   }
 
   /* ---------------- 生命周期 ---------------- */
@@ -62,6 +63,7 @@ class Game {
     this.pending = null;
     this.pendingLevels = 0;
     this.log = [];
+    this.events = [];
     this.runStats = { kills: 0, gold: 0, crystals: 0, startedAt: Date.now() };
 
     this.player = {
@@ -300,6 +302,22 @@ class Game {
     if (this.log.length > 40) this.log.shift();
   }
 
+  /**
+   * 表现层事件：与游戏逻辑无关，只描述“刚刚发生了什么”，供前端播放音效/飘字/震屏。
+   * 每次请求取走一次即弃，不参与存档，也不影响回合结算。
+   */
+  emit(ev) {
+    this.events.push(ev);
+    if (this.events.length > 64) this.events.shift();
+  }
+
+  drainEvents() {
+    if (!this.events || !this.events.length) return [];
+    const out = this.events;
+    this.events = [];
+    return out;
+  }
+
   /* ---------------- 主要动作 ---------------- */
 
   handle(action) {
@@ -354,6 +372,7 @@ class Game {
       } else if (this.depth >= MAX_FLOOR) {
         this.addLog('这里没有向下的路了。');
       } else {
+        this.emit({ type: 'stairs', depth: this.depth + 1 });
         this.endPlayerTurn(1);
         this.enterFloor(this.depth + 1);
         return;
@@ -365,6 +384,7 @@ class Game {
 
   tryAttack(dx, dy) {
     if (!dx && !dy) return;
+    this.emit({ type: 'swing', dx, dy });
     const weapon = this.player.weapon;
     const maxRange = weapon.range + this.player.rangeBonus;
     let target = null;
@@ -379,6 +399,7 @@ class Game {
       if (t === M.SECRET && step === 1) {
         this.tiles[y * this.mapW + x] = M.FLOOR;
         this.addLog('墙壁裂开了，里面别有洞天！');
+        this.emit({ type: 'secret', x, y });
         this.updateFov();
         this.endPlayerTurn(1);
         return;
@@ -404,6 +425,7 @@ class Game {
         this.player.hp = Math.min(this.player.maxHp, this.player.hp + heal);
       }
       this.addLog(`${crit ? '暴击！' : ''}你对${target.name}造成 ${dmg} 伤害${heal ? `（吸血 +${heal}）` : ''}`);
+      this.emit({ type: 'hit', x: hitX, y: hitY, dmg, crit, heal });
       if (target.hp <= 0) this.killEnemy(target);
     }
 
@@ -423,6 +445,7 @@ class Game {
     const heal = Math.round(this.player.maxHp * 0.4);
     this.player.hp = Math.min(this.player.maxHp, this.player.hp + heal);
     this.addLog(`饮下药水，回复 ${heal} 点生命。`);
+    this.emit({ type: 'heal', amount: heal, x: this.player.x, y: this.player.y });
     this.endPlayerTurn(1);
   }
 
@@ -435,6 +458,7 @@ class Game {
       this.player.gold += item.amount;
       this.runStats.gold += item.amount;
       this.addLog(`拾取 ${item.amount} 金币。`);
+      this.emit({ type: 'pickup', kind: 'gold', amount: item.amount, x, y });
     } else if (item.kind === 'potion') {
       if (this.player.potion >= POTION_CAP) {
         this.addLog('药水已满，留在原地。');
@@ -443,19 +467,23 @@ class Game {
       }
       this.player.potion++;
       this.addLog('获得 1 瓶药水。');
+      this.emit({ type: 'pickup', kind: 'potion', x, y });
     } else if (item.kind === 'revive') {
       if (this.player.revive > 0) {
         this.player.gold += 20;
         this.addLog('多余的生命护符化作 20 金币。');
+        this.emit({ type: 'pickup', kind: 'gold', amount: 20, x, y });
       } else {
         this.player.revive = 1;
         this.addLog('获得「生命护符」：死亡时自动复活一次！');
+        this.emit({ type: 'pickup', kind: 'revive', x, y });
       }
     } else if (item.kind === 'chest') {
       const options = Object.values(WEAPONS).filter((w) => w.id !== this.player.weapon.id);
       const w = this.rng.pick(options);
       this.player.weapon = w;
       this.addLog(`打开宝箱，换上「${w.name}」（${w.desc}）。`);
+      this.emit({ type: 'pickup', kind: 'chest', weapon: w.id, x, y });
     }
   }
 
@@ -463,6 +491,7 @@ class Game {
     this.enemies = this.enemies.filter((x) => x.id !== e.id);
     this.runStats.kills++;
     this.addLog(`${e.name}被击败了。`);
+    this.emit({ type: 'kill', x: e.x, y: e.y, name: e.name, boss: !!e.boss, final: !!e.final });
     this.player.xp += e.xp;
 
     if (e.boss) {
@@ -491,6 +520,7 @@ class Game {
       this.player.xpNext = Math.round(this.player.xpNext * 1.32) + 4;
       this.pendingLevels++;
       this.addLog(`升级！现在是 ${this.player.level} 级。`);
+      this.emit({ type: 'levelup', level: this.player.level, x: this.player.x, y: this.player.y });
     }
     if (!this.pending && this.pendingLevels > 0) this.rollChoices();
   }
@@ -507,6 +537,7 @@ class Game {
     const upgrade = UPGRADE_POOL.find((u) => u.id === pick.id);
     if (upgrade) upgrade.apply(this);
     this.addLog(`选择强化：${upgrade.name} —— ${upgrade.desc}`);
+    this.emit({ type: 'upgrade', id: upgrade.id, name: upgrade.name });
     this.pendingLevels--;
     this.pending = null;
     if (this.pendingLevels > 0) {
@@ -584,6 +615,7 @@ class Game {
     if (e.final && !this.bossSummoned && e.hp < e.maxHp * 0.5) {
       this.bossSummoned = true;
       this.addLog('地牢之主发出咆哮，召唤了援军！');
+      this.emit({ type: 'summon', x: e.x, y: e.y });
       const spots = M.DIRS.map(([dx, dy]) => ({ x: e.x + dx, y: e.y + dy }))
         .filter((s) => this.isWalkable(s.x, s.y) && !this.enemyAt(s.x, s.y) && !(s.x === p.x && s.y === p.y));
       spots.slice(0, 3).forEach((s) => this.spawnEnemy('slime', s.x, s.y));
@@ -628,6 +660,7 @@ class Game {
     const dmg = Math.max(1, Math.round(raw - this.player.def * 0.5));
     this.player.hp -= dmg;
     this.addLog(`${e.name}${ranged ? '射出暗影弹' : '攻击'}，你受到 ${dmg} 伤害。`);
+    this.emit({ type: 'playerHit', dmg, ranged, from: e.type, x: this.player.x, y: this.player.y });
     if (this.player.hp <= 0) this.handleDeath();
   }
 
@@ -637,10 +670,12 @@ class Game {
       this.player.hp = Math.ceil(this.player.maxHp * 0.5);
       this.player.invuln = 3;
       this.addLog('生命护符碎裂，你重新站了起来！（3 回合无敌）');
+      this.emit({ type: 'revive', x: this.player.x, y: this.player.y });
       return;
     }
     this.player.hp = 0;
     this.screen = 'dead';
+    this.emit({ type: 'dead' });
     this.deathInfo = {
       floor: this.depth,
       kills: this.runStats.kills,
@@ -658,6 +693,7 @@ class Game {
     this.runStats.crystals += bonus;
     this.meta.wins = (this.meta.wins || 0) + 1;
     this.screen = 'won';
+    this.emit({ type: 'win' });
     this.winInfo = {
       floor: this.depth,
       kills: this.runStats.kills,
@@ -712,6 +748,7 @@ class Game {
       deathInfo: this.deathInfo || null,
       winInfo: this.winInfo || null,
       lastItem: null,
+      events: this.drainEvents(),
     };
 
     if (this.tiles) {
