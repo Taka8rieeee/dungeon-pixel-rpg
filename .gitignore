@@ -1,0 +1,13 @@
+# 运行时数据（局外存档由 src/save.js 自动创建目录）
+data/
+
+# 依赖（本项目零依赖，兜底）
+node_modules/
+
+# 本地工具与代理工作目录
+.workbuddy/
+
+# 系统与编辑器杂项
+.DS_Store
+Thumbs.db
+*.log

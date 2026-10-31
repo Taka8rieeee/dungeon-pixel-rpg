@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>地牢像素 RPG</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="stage">
+    <canvas id="game" width="480" height="288"></canvas>
+
+    <div id="hud">
+      <div class="hud-block">
+        <div id="floorLabel">第 1 层</div>
+        <div id="hpBar"><div id="hpFill"></div><span id="hpText">60 / 60</span></div>
+      </div>
+      <div class="hud-block right">
+        <span id="weaponLabel">铁剑</span>
+        <span id="potionLabel">药水 ×1</span>
+        <span id="goldLabel">金币 0</span>
+        <span id="crystalLabel">晶石 0</span>
+      </div>
+    </div>
+
+    <div id="stats"></div>
+    <div id="log"></div>
+
+    <div id="overlay" class="hidden"><div id="overlayInner"></div></div>
+  </div>
+
+  <script src="client.js"></script>
+</body>
+</html>
