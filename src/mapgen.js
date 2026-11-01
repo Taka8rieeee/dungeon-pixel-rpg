@@ -98,6 +98,7 @@ function carveCave(rng, tiles) {
             if (!inBounds(nx, ny) || cells[idx(nx, ny)] === WALL) walls++;
           }
         }
+        // 阈值保持 5：降到 4 会让洞穴直接坍缩成 90% 实心岩，这里改用撒石块来加密
         next[idx(x, y)] = walls >= 5 ? WALL : FLOOR;
       }
     }
@@ -230,33 +231,100 @@ function addSecretRoom(rng, tiles) {
   return null;
 }
 
-/**
- * 洞穴层常常是一大片空地，怪全堆在里面。随机立几根石柱当掩体。
- * 只挑「周围 8 格全是地板」的位置，立完之后仍然可以从旁边绕过去，不会切断通路。
- */
-function sprinklePillars(rng, tiles, start, stairs) {
-  const candidates = [];
-  for (let y = 2; y < H - 2; y++) {
-    for (let x = 2; x < W - 2; x++) {
-      if (tiles[idx(x, y)] !== FLOOR) continue;
-      if (Math.abs(x - start.x) + Math.abs(y - start.y) < 7) continue;
-      if (Math.abs(x - stairs.x) + Math.abs(y - stairs.y) < 4) continue;
-      let open = true;
-      for (let dy = -1; dy <= 1 && open; dy++) {
-        for (let dx = -1; dx <= 1; dx++) {
-          if (dx === 0 && dy === 0) continue;
-          if (tiles[idx(x + dx, y + dy)] !== FLOOR) {
-            open = false;
-            break;
-          }
-        }
-      }
-      if (open) candidates.push({ x, y });
+/** 从起点洪水填充，标出主连通区域。裂墙算可穿过 —— 隐藏房是合法区域，不能当孤立碎片填掉 */
+function markMainRegion(tiles, start) {
+  const seen = new Uint8Array(W * H);
+  const s = idx(start.x, start.y);
+  if (tiles[s] === WALL) return seen;
+  seen[s] = 1;
+  const stack = [s];
+  while (stack.length) {
+    const i = stack.pop();
+    const x = i % W;
+    const y = (i - x) / W;
+    for (const [dx, dy] of DIRS) {
+      const nx = x + dx;
+      const ny = y + dy;
+      if (!inBounds(nx, ny)) continue;
+      const j = idx(nx, ny);
+      if (seen[j]) continue;
+      if (tiles[j] === WALL) continue;
+      seen[j] = 1;
+      stack.push(j);
     }
   }
-  const n = Math.min(16, Math.floor(candidates.length / 9));
-  const chosen = rng.shuffle(candidates).slice(0, n);
-  for (const s of chosen) tiles[idx(s.x, s.y)] = WALL;
+  return seen;
+}
+
+/**
+ * 洞穴层常常是一大片空地。成片撒碎石群当掩体，撒完把被围死的零碎空地封成岩体 ——
+ * 既压掉空旷感，又保证所有走得通的地方都连在一起（不会有怪被困在死角）。
+ */
+function sprinkleRocks(rng, tiles, start, stairs) {
+  const snapshot = tiles.slice();
+
+  // 裂墙及其周围一格必须留空，否则隐藏房的唯一入口会被堵死
+  const forbidden = new Set();
+  for (let y = 1; y < H - 1; y++) {
+    for (let x = 1; x < W - 1; x++) {
+      if (tiles[idx(x, y)] !== SECRET) continue;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          forbidden.add(idx(x + dx, y + dy));
+        }
+      }
+    }
+  }
+
+  const centers = [];
+  for (let y = 3; y < H - 3; y++) {
+    for (let x = 3; x < W - 3; x++) {
+      if (tiles[idx(x, y)] !== FLOOR) continue;
+      if (forbidden.has(idx(x, y))) continue;
+      if (Math.abs(x - start.x) + Math.abs(y - start.y) < 8) continue;
+      if (Math.abs(x - stairs.x) + Math.abs(y - stairs.y) < 5) continue;
+      let open = 0;
+      for (let dy = -2; dy <= 2; dy++) {
+        for (let dx = -2; dx <= 2; dx++) {
+          if (tiles[idx(x + dx, y + dy)] === FLOOR) open++;
+        }
+      }
+      if (open >= 18) centers.push({ x, y });
+    }
+  }
+
+  const wanted = Math.min(44, Math.floor(centers.length / 7));
+  const chosen = rng.shuffle(centers).slice(0, wanted);
+  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+  for (const c of chosen) {
+    // 从一个中心点长出一片 4~9 格的碎石
+    const cluster = [{ x: c.x, y: c.y }];
+    const size = rng.int(4, 9);
+    for (let guard = 0; guard < 30 && cluster.length < size; guard++) {
+      const base = cluster[rng.int(0, cluster.length - 1)];
+      const [dx, dy] = dirs[rng.int(0, 3)];
+      const nx = base.x + dx;
+      const ny = base.y + dy;
+      if (nx < 2 || ny < 2 || nx >= W - 2 || ny >= H - 2) continue;
+      if (tiles[idx(nx, ny)] !== FLOOR) continue;
+      if (forbidden.has(idx(nx, ny))) continue;
+      if (cluster.some((p) => p.x === nx && p.y === ny)) continue;
+      cluster.push({ x: nx, y: ny });
+    }
+    for (const p of cluster) tiles[idx(p.x, p.y)] = WALL;
+  }
+
+  const main = markMainRegion(tiles, start);
+  if (!main[idx(stairs.x, stairs.y)]) {
+    // 楼梯被围死了，整层回退
+    for (let i = 0; i < tiles.length; i++) tiles[i] = snapshot[i];
+    return 0;
+  }
+  // 被围出来的零碎空地直接填实，避免敌人躲进去出不来
+  for (let i = 0; i < tiles.length; i++) {
+    if (tiles[i] === FLOOR && !main[i]) tiles[i] = WALL;
+  }
   return chosen.length;
 }
 
@@ -294,8 +362,10 @@ function generateFloor(rng, depth) {
     stairs = { x: farthest % W, y: Math.floor(farthest / W) };
     tiles[idx(stairs.x, stairs.y)] = STAIRS;
 
+    // 先撒石块再挖隐藏房：反过来的话，碎石可能切断通往裂墙的路径，
+    // 隐藏房会被后面的「孤立区域填实」整个吞掉
+    if (isCave) sprinkleRocks(rng, tiles, start, stairs);
     const secret = addSecretRoom(rng, tiles);
-    if (isCave) sprinklePillars(rng, tiles, start, stairs);
     return { tiles, rooms, start, stairs, secret, isCave, w: W, h: H };
   }
 
