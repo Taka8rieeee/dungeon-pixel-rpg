@@ -30,7 +30,7 @@ body {
 
 .stick {
   position: fixed;
-  bottom: 5vh;
+  bottom: 9vh;
   width: 30vmin;
   height: 30vmin;
   max-width: 148px;
@@ -58,16 +58,16 @@ body {
 }
 
 .stick-move {
-  left: 4vmin;
+  left: 9vmin;
 }
 
 .stick-aim {
-  right: 4vmin;
+  right: 9vmin;
 }
 
 .touch-btn {
   position: fixed;
-  right: 7vmin;
+  right: 12vmin;
   width: 13vmin;
   height: 13vmin;
   max-width: 68px;
@@ -94,17 +94,18 @@ body.touch .touch-btn {
 }
 
 body.touch .touch-btn:nth-of-type(1) {
-  bottom: 44vmin;
+  bottom: 48vmin;
+  right: 12vmin;
 }
 
 body.touch .touch-btn:nth-of-type(2) {
-  bottom: 30vmin;
-  right: 19vmin;
+  bottom: 34vmin;
+  right: 24vmin;
 }
 
 body.touch .touch-btn:nth-of-type(3) {
-  bottom: 16vmin;
-  right: 26vmin;
+  bottom: 20vmin;
+  right: 31vmin;
 }
 
 
