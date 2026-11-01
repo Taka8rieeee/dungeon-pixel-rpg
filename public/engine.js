@@ -70,6 +70,7 @@
       this.fovTimer = 0;
       this.flow = null;
       this.flowTimer = 0;
+      this.calmTimer = 0;
       this.nextId = 1;
     }
 
@@ -141,6 +142,8 @@
       this.fovTimer = 0;
       this.flow = null;
       this.flowTimer = 0;
+      // 刚进新层给玩家一点喘息时间，避免落地即被围
+      this.calmTimer = 2;
 
       const p = this.player;
       p.x = (f.start.x + 0.5) * TILE;
@@ -171,7 +174,8 @@
           if (this.tiles[i] !== MapGen.FLOOR) continue;
           if (reach[i] < 0) continue;
           if (x === f.start.x && y === f.start.y) continue;
-          if (dist2(x, y, f.start.x, f.start.y) < 36) continue;
+          // 出生点周围留出安全区（8 格 ≈ 一个视野半径），开局不会一睁眼就被围
+          if (dist2(x, y, f.start.x, f.start.y) < 64) continue;
           free.push({ x, y });
         }
       }
@@ -439,6 +443,7 @@
       if (this.screen !== 'playing' || this.paused) return;
       dt = clamp(dt, 0, 0.05);
       this.t += dt;
+      if (this.calmTimer > 0) this.calmTimer = Math.max(0, this.calmTimer - dt);
 
       this.updatePlayer(dt, input);
 
@@ -735,10 +740,15 @@
         const dy = p.y - e.y;
         const d = Math.hypot(dx, dy) || 1;
 
-        // 索敌：只对身边一小圈有反应，避免下到新层后整张地图一起扑过来
+        // 索敌三层收敛：
+        //   1. 进新层的前 2 秒是缓冲期，只有贴身的怪会动
+        //   2. 远处的怪必须真的「看得见」玩家才会醒，隔墙不追
+        //   3. 平时上限 200px，跟丢后重新睡下
         if (!e.awake) {
-          const notice = e.guard ? 165 : 200;
-          if (d < notice) {
+          const calm = this.calmTimer > 0;
+          const notice = e.guard ? 165 : calm ? 95 : 200;
+          const canSense = d < 110 || this.hasLine(e.x, e.y, p.x, p.y);
+          if (d < notice && canSense) {
             e.awake = true;
           } else {
             e.dirX = 0;
