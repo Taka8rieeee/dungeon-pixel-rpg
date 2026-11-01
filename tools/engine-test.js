@@ -626,15 +626,41 @@ test('战锤会把敌人击退', () => {
   assert.ok(e.slowTimer > 0, '敌人应被减速');
 });
 
-test('宝箱给出武器与增益二选一，选武器会入库', () => {
-  const w = newWorld(7000);
-  w.openChest({ x: w.player.x, y: w.player.y });
-  assert.ok(w.pending, '应弹出选择');
-  assert.strictEqual(w.paused, true);
-  assert.strictEqual(w.pendingKind, 'chest');
-  assert.ok(w.pending.some((o) => o.kind === 'buff'), '应有增益选项');
-  assert.ok(w.pending.some((o) => o.kind === 'weapon'), '应有武器选项');
+test('宝箱内容在武器与增益之间随机', () => {
+  let weaponOnly = 0;
+  let buffOnly = 0;
+  let mixed = 0;
+  for (let seed = 1; seed <= 60; seed++) {
+    const w = newWorld(9000 + seed);
+    w.openChest({ x: w.player.x, y: w.player.y });
+    assert.ok(w.pending, '应弹出选择');
+    assert.strictEqual(w.paused, true);
+    assert.strictEqual(w.pendingKind, 'chest');
+    assert.ok(w.pending.length >= 2 && w.pending.length <= 3, `选项数量应在 2~3，实际 ${w.pending.length}`);
+    assert.ok(!w.pending.some((o) => o.id === 'starter'), '旧木棒不该出现在宝箱里');
 
+    const hasW = w.pending.some((o) => o.kind === 'weapon');
+    const hasB = w.pending.some((o) => o.kind === 'buff');
+    if (hasW && hasB) mixed++;
+    else if (hasW) weaponOnly++;
+    else buffOnly++;
+  }
+  assert.ok(mixed > 0, '应出现过武器+增益混合的宝箱');
+  assert.ok(buffOnly > 0, '应出现过纯增益的宝箱');
+  assert.ok(weaponOnly + mixed > buffOnly, '武器仍应是宝箱的主要产出');
+});
+
+test('宝箱选武器会入库', () => {
+  let w = null;
+  for (let seed = 1; seed <= 40; seed++) {
+    const cand = newWorld(9100 + seed);
+    cand.openChest({ x: cand.player.x, y: cand.player.y });
+    if (cand.pending.some((o) => o.kind === 'weapon')) {
+      w = cand;
+      break;
+    }
+  }
+  assert.ok(w, '40 个宝箱里一个武器都没刷出来');
   const idx = w.pending.findIndex((o) => o.kind === 'weapon');
   const wantId = w.pending[idx].id;
   w.resolveChoice(idx);

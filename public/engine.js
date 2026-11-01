@@ -1377,25 +1377,44 @@
       return true;
     }
 
-    /** 宝箱：暂停游戏，在新武器与增益之间挑一个（最多三个选项） */
+    /** 宝箱：暂停游戏，从武器池和增益池里随机刷出最多三个选项 */
     openChest(item) {
       const p = this.player;
       // 旧木棒是开局垃圾，永远不该出现在宝箱选项里
-      const fresh = Object.keys(WEAPONS).filter((id) => id !== 'starter' && !p.weapons.includes(id));
-      const options = [];
+      const freshWeapons = this.rng.shuffle(
+        Object.keys(WEAPONS).filter((id) => id !== 'starter' && !p.weapons.includes(id)),
+      );
+      const buffPool = this.rng.shuffle(BUFFS.slice());
+
+      // 每次开箱随机决定这一箱有几个武器、几个增益：
+      //   20% 纯增益 / 42% 一武器 / 28% 两武器 / 10% 纯武器
+      const roll = this.rng.float();
+      let wantWeapons = roll < 0.2 ? 0 : roll < 0.62 ? 1 : roll < 0.9 ? 2 : 3;
+      wantWeapons = Math.min(wantWeapons, freshWeapons.length);
 
       const full = p.weapons.length >= WEAPON_SLOTS;
       const rawStick = p.weapons.length === 1 && p.weapons[0] === 'starter';
-      for (const id of this.rng.shuffle(fresh).slice(0, 2)) {
-        let note = '';
-        if (full) note = `（顶替手上的${p.weapon.name}，旧武器会掉在地上）`;
-        else if (rawStick) note = '（换掉旧木棒）';
+      let note = '';
+      if (full) note = `（顶替手上的${p.weapon.name}，旧武器会掉在地上）`;
+      else if (rawStick) note = '（换掉旧木棒）';
+
+      const options = [];
+      let wi = 0;
+      let bi = 0;
+
+      for (; wi < wantWeapons; wi++) {
+        const id = freshWeapons[wi];
         options.push({ kind: 'weapon', id, name: WEAPONS[id].name, desc: WEAPONS[id].desc + note });
       }
-      // 武器全收齐了就多给一个增益选项
-      const buffCount = options.length === 0 ? 2 : 1;
-      for (const b of this.rng.shuffle(BUFFS).slice(0, buffCount)) {
+      // 剩余名额先用增益补满
+      while (options.length < 3 && bi < buffPool.length) {
+        const b = buffPool[bi++];
         options.push({ kind: 'buff', id: b.id, name: b.name, desc: b.desc });
+      }
+      // 增益不够（理论上不会）就用剩下的武器继续补
+      while (options.length < 3 && wi < freshWeapons.length) {
+        const id = freshWeapons[wi++];
+        options.push({ kind: 'weapon', id, name: WEAPONS[id].name, desc: WEAPONS[id].desc + note });
       }
 
       this.pending = options;

@@ -746,12 +746,7 @@ function choiceHtml() {
   const kind = world.pendingKind;
   const title =
     kind === 'starter' ? '选择开局武器' : kind === 'chest' ? '宝箱：带走一样' : '升级！三选一';
-  const sub =
-    kind === 'starter'
-      ? '每把武器手感不同，选一把顺手的'
-      : kind === 'chest'
-        ? '新武器会永久留在身上，随时切换'
-        : '';
+  const sub = kind === 'chest' ? '武器或增益，只能带走一样' : '';
   return `
     <div class="choice-panel">
       <div class="choice-title">${title}</div>
