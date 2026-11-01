@@ -354,7 +354,8 @@ function sprinkleRocks(rng, tiles, start, stairs) {
  * @returns {{tiles:string[], rooms:Array, start:{x,y}, stairs:{x,y}, secret:object|null, isCave:boolean}}
  */
 function generateFloor(rng, depth) {
-  const isCave = depth === 2 || depth === 4;
+  // 无尽地牢：每三层有一层是洞穴（2、5、8、11…），其余是石砌房间
+  const isCave = (depth - 2) % 3 === 0;
   let tiles;
   let rooms = [];
   let start;

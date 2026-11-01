@@ -311,6 +311,28 @@ h2 {
   line-height: 1.7;
 }
 
+/* 「继续 / 收手」的二选一 */
+
+.rest-actions {
+  display: flex;
+  gap: 0.9em;
+  margin-top: 1.2em;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.start.ghost {
+  color: #b8b8cc;
+  background: transparent;
+  border: 1px solid #45455e;
+  box-shadow: none;
+}
+
+.start.ghost:hover {
+  border-color: #8a8aa8;
+  color: #fff;
+}
+
 .choice-panel {
   display: flex;
   flex-direction: column;

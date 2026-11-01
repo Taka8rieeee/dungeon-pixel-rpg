@@ -122,6 +122,10 @@ const Sound = (() => {
       tone({ from: 1180, dur: 0.07, gain: 0.13, wave: 'sine' });
       tone({ from: 784, dur: 0.14, gain: 0.1, wave: 'triangle', delay: 0.06 });
     },
+    boom() {
+      noise({ from: 900, to: 60, dur: 0.42, gain: 0.3, filter: 'lowpass', decay: 2.2 });
+      tone({ from: 150, to: 42, dur: 0.36, gain: 0.22, wave: 'triangle' });
+    },
     levelup() {
       [523, 659, 784, 1047].forEach((f, i) => tone({ from: f, dur: 0.16, gain: 0.14, wave: 'triangle', delay: i * 0.075 }));
     },

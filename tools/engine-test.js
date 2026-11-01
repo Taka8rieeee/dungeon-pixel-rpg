@@ -219,14 +219,176 @@ test('踩到解封的楼梯会自动下一层', () => {
   assert.ok(w.enemies.length > 0);
 });
 
-test('第 5 层击败最终 Boss 通关', () => {
+test('无尽模式：第 5 层的深渊领主杀掉后只是开楼梯，不会通关', () => {
   const w = newWorld(1010);
   w.debugGoto(5);
-  const boss = w.enemies.find((e) => e.final);
-  assert.ok(boss, '第 5 层应有地牢之主');
+  const boss = w.enemies.find((e) => e.boss);
+  assert.ok(boss, '第 5 层应有层主');
+  assert.strictEqual(boss.type, 'overlord', '第 5 层应是深渊领主');
+  assert.strictEqual(w.stairs.locked, true, '楼梯一开始是锁的');
   w.damageEnemy(boss, 999);
-  assert.strictEqual(w.screen, 'won');
-  assert.ok(w.meta.wins === 1);
+  assert.strictEqual(w.screen, 'playing', '不应进入胜利结算');
+  assert.strictEqual(w.stairs.locked, false, '杀掉层主应解锁楼梯');
+});
+
+test('地牢没有层数上限：深层依然能生成并正常游玩', () => {
+  const w = newWorld(1020);
+  for (const d of [6, 12, 25, 40]) {
+    w.debugGoto(d);
+    assert.strictEqual(w.depth, d);
+    assert.ok(w.enemies.length > 0, `第 ${d} 层没有敌人`);
+    assert.ok(w.items.length > 0, `第 ${d} 层没有物品`);
+    const boss = w.enemies.find((e) => e.boss);
+    assert.ok(boss, `第 ${d} 层没有层主`);
+    assert.strictEqual(w.stairs.locked, true);
+  }
+});
+
+test('每 3 层出现一次「继续 / 收手」岔路', () => {
+  const w = newWorld(1030);
+  // 手动把层数对齐到 3 层，再踩楼梯
+  w.debugGoto(3);
+  w.stairs.locked = false;
+  w.player.x = w.stairs.x;
+  w.player.y = w.stairs.y;
+  w.tick(0.02, idle());
+  assert.ok(w.restPrompt, '第 3 层下楼应弹出岔路');
+  assert.strictEqual(w.restPrompt.next, 4);
+  assert.strictEqual(w.paused, true, '岔路应暂停游戏');
+  assert.strictEqual(w.depth, 3, '还没真正下去');
+
+  assert.strictEqual(w.continueRun(), true);
+  assert.strictEqual(w.depth, 4, '选择继续后应进入第 4 层');
+  assert.strictEqual(w.restPrompt, null);
+  assert.strictEqual(w.paused, false);
+
+  // 第 4 层下楼不该问（下一次是第 7 层）
+  w.stairs.locked = false;
+  w.player.x = w.stairs.x;
+  w.player.y = w.stairs.y;
+  w.tick(0.02, idle());
+  assert.strictEqual(w.restPrompt, null, '第 4 → 5 层不该弹岔路');
+  assert.strictEqual(w.depth, 5);
+});
+
+test('岔路选「收手」会回到标题并记录最深层', () => {
+  const w = newWorld(1040);
+  w.debugGoto(3);
+  w.stairs.locked = false;
+  w.player.x = w.stairs.x;
+  w.player.y = w.stairs.y;
+  w.tick(0.02, idle());
+  assert.ok(w.restPrompt);
+
+  assert.strictEqual(w.endRun(), true);
+  assert.strictEqual(w.screen, 'title');
+  assert.strictEqual(w.restPrompt, null);
+  assert.strictEqual(w.meta.best.floor, 3, '应记录最深到第 3 层');
+});
+
+test('怪物数值随层数小幅上升，深渊领主每 5 层出现', () => {
+  const w = newWorld(1050);
+  const sample = (d) => {
+    w.threat = 0; // 先钉死威胁倍率，单独看层数成长
+    w.debugGoto(d);
+    return w.enemies.find((e) => !e.boss && e.type === 'slime') || w.enemies.find((e) => !e.boss);
+  };
+  w.player.weapons = ['starter'];
+  w.player.weapon = Engine.WEAPONS.starter;
+
+  const a = sample(1);
+  const hp1 = a.maxHp;
+  const atk1 = a.atk;
+  const b = sample(11);
+  assert.ok(b.maxHp > hp1, `第 11 层的怪应比第 1 层硬（${b.maxHp} vs ${hp1}）`);
+  assert.ok(b.atk > atk1, '第 11 层的怪应比第 1 层疼');
+  assert.ok(b.maxHp < hp1 * 4, `第 11 层血量涨幅应是小幅（${b.maxHp} vs ${hp1}）`);
+
+  assert.strictEqual(w.enemies.find((e) => e.boss).type, 'master', '第 11 层是普通层主');
+  w.debugGoto(15);
+  assert.strictEqual(w.enemies.find((e) => e.boss).type, 'overlord', '第 15 层应是深渊领主');
+});
+
+test('玩家 DPS 越高，同层怪物血量越高', () => {
+  const w = newWorld(1060);
+  w.player.weapons = ['sword'];
+  w.player.weapon = Engine.WEAPONS.sword;
+
+  const hpAt = (depth) => {
+    w.debugGoto(depth); // 内部会按当前面板重算 threat
+    const e = w.spawnEnemy('slime', w.player.x, w.player.y + 40);
+    e.dead = true; // 只是取样，别留在场上
+    return e.maxHp;
+  };
+
+  w.player.atk = 8;
+  w.player.crit = 0.0;
+  const weak = w.threatMul();
+  const weakHp = hpAt(10);
+
+  w.player.atk = 40;
+  w.player.crit = 0.5;
+  const strong = w.threatMul();
+  const strongHp = hpAt(10);
+
+  assert.ok(strong > weak, `DPS 高时威胁倍率应更大（${strong.toFixed(2)} vs ${weak.toFixed(2)}）`);
+  assert.ok(strongHp > weakHp, `同一层，强玩家的怪物应更硬（${strongHp} vs ${weakHp}）`);
+  assert.ok(strong <= Engine.SCALING.dpsMax + 1e-6, '威胁倍率应有上限');
+  assert.ok(strongHp < weakHp * 4, '跟随幅度不应失控');
+});
+
+test('新怪物都能生成并带出各自的行为参数', () => {
+  const w = newWorld(1070);
+  w.threat = 1;
+  w.debugGoto(12);
+
+  for (const [type, check] of [
+    ['wraith', (e) => e.dodge > 0],
+    ['golem', (e) => e.knockPlayer > 0],
+    ['bomber', (e) => e.splash > 0 && e.ranged],
+  ]) {
+    assert.ok(Engine.ENEMY_TYPES[type], `缺少怪物定义 ${type}`);
+    const e = w.spawnEnemy(type, w.player.x, w.player.y + 40);
+    assert.ok(check(e), `${type} 的行为参数没有传下去`);
+    e.dead = true;
+  }
+
+  // 深层刷怪池里真的会出现新怪
+  const seen = new Set();
+  for (let i = 0; i < 20; i++) {
+    w.debugGoto(12 + (i % 4));
+    for (const e of w.enemies) if (!e.boss) seen.add(e.type);
+  }
+  const fresh = ['wraith', 'golem', 'bomber'].filter((t) => seen.has(t));
+  assert.ok(fresh.length >= 2, `第 12~15 层应刷出新怪，实际只见到 ${[...seen].join(',')}`);
+});
+
+test('掷弹手的炸弹会范围爆炸并伤到玩家', () => {
+  const w = newWorld(1080);
+  w.threat = 1;
+  w.debugGoto(9);
+  w.enemies = [];
+  const b = w.spawnEnemy('bomber', w.player.x + 60, w.player.y);
+  b.awake = true;
+  b.cd = 0;
+  w.player.invuln = 0;
+  const hp0 = w.player.hp;
+
+  // 手动抛一颗落在玩家身上的炸弹
+  w.projectiles.push({
+    x: w.player.x + 6,
+    y: w.player.y,
+    vx: -20,
+    vy: 0,
+    life: 2,
+    dmg: 10,
+    from: 'enemy',
+    r: 5,
+    splash: 30,
+  });
+  for (let i = 0; i < 6; i++) w.tick(0.016, idle());
+  assert.ok(w.blasts.length > 0 || w.player.hp < hp0, '炸弹应产生爆炸');
+  assert.ok(w.player.hp < hp0, `爆炸应伤到玩家（${hp0} → ${w.player.hp}）`);
 });
 
 test('被击倒会进入死亡结算', () => {

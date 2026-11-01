@@ -1,7 +1,7 @@
 {
   "tile": 16,
   "cols": 8,
-  "rows": 2,
+  "rows": 3,
   "frames": {
     "floor_a": [
       0,
@@ -66,6 +66,18 @@
     "crack": [
       7,
       1
+    ],
+    "wraith": [
+      0,
+      2
+    ],
+    "golem": [
+      1,
+      2
+    ],
+    "bomber": [
+      2,
+      2
     ]
   }
 }

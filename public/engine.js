@@ -11,7 +11,8 @@
   else root.Engine = api;
 })(typeof self !== 'undefined' ? self : this, function () {
   const TILE = 16;
-  const MAX_FLOOR = 5;
+  /** 无尽地牢：没有终点层，只在每 REST_EVERY 层问一次「继续 / 收手」 */
+  const MAX_FLOOR = Infinity;
   const POTION_CAP = 3;
 
   /**
@@ -132,9 +133,36 @@
     rat: { name: '地鼠', hp: 13, atk: 4, def: 0, speed: 104, r: 6, xp: 2, cd: 0.55 },
     archer: { name: '邪术师', hp: 20, atk: 6, def: 0, speed: 62, r: 7, xp: 4, cd: 1.15, ranged: true, prefer: 130, projSpeed: 230 },
     brute: { name: '暴徒', hp: 52, atk: 10, def: 2, speed: 50, r: 9, xp: 7, cd: 1.2 },
+    // 速灵：极快、极脆，贴脸连击。偶尔闪过一次攻击
+    wraith: { name: '速灵', hp: 15, atk: 4, def: 0, speed: 152, r: 6, xp: 5, cd: 0.42, dodge: 0.18 },
+    // 石傀儡：慢、厚、一拳把人打飞
+    golem: { name: '石傀儡', hp: 120, atk: 15, def: 6, speed: 38, r: 10, xp: 12, cd: 1.5, knockPlayer: 34 },
+    // 掷弹手：抛炸弹，落点范围爆炸
+    bomber: { name: '掷弹手', hp: 26, atk: 9, def: 0, speed: 58, r: 7, xp: 6, cd: 1.9, ranged: true, prefer: 165, projSpeed: 165, splash: 30 },
     master: { name: '层主', hp: 150, atk: 11, def: 1, speed: 62, r: 11, xp: 20, cd: 0.8, boss: true },
-    overlord: { name: '地牢之主', hp: 380, atk: 15, def: 4, speed: 66, r: 13, xp: 50, cd: 0.7, boss: true, final: true },
+    overlord: { name: '深渊领主', hp: 380, atk: 15, def: 4, speed: 66, r: 13, xp: 50, cd: 0.7, boss: true, summon: true },
   };
+
+  /**
+   * 无尽模式数值缩放。
+   * 怪物血量 = 基础 × 层数成长 × 玩家强度倍率：
+   *   - 层数成长是线性的，每层 +10%
+   *   - 玩家强度按「面板 DPS 相对第 1 层开局」的 0.4 次幂跟随，上下限 0.85~3.2
+   * 攻击力涨得比血量慢，避免深层变成一击必死。
+   */
+  const SCALING = {
+    hpPerDepth: 0.1,
+    atkPerDepth: 0.06,
+    defPerDepth: 0.25,
+    xpPerDepth: 0.08,
+    dpsBase: 13,
+    dpsWeight: 0.4,
+    dpsMin: 0.85,
+    dpsMax: 3.2,
+  };
+
+  /** 每下探多少层问一次「继续 / 收手」 */
+  const REST_EVERY = 3;
 
   const UPGRADE_POOL = [
     { id: 'atk', name: '锋利', desc: '攻击力 +2', apply: (p) => { p.atk += 2; } },
@@ -176,6 +204,7 @@
       this.pendingChest = null;
       this.pendingSkip = false;
       this.shop = null;
+      this.restPrompt = null;
       this.t = 0;
       this.depth = 1;
       this.fovTimer = 0;
@@ -199,6 +228,7 @@
       this.pendingChest = null;
       this.pendingSkip = false;
       this.shop = null;
+      this.restPrompt = null;
       this.events = [];
       this.log = [];
       this.t = 0;
@@ -259,6 +289,7 @@
       this.items = [];
       this.projectiles = [];
       this.slashes = [];
+      this.blasts = [];
       this.bossSummoned = false;
       this.fovTimer = 0;
       this.flow = null;
@@ -282,8 +313,11 @@
         }
       }
 
-      this.stairs = { x: (f.stairs.x + 0.5) * TILE, y: (f.stairs.y + 0.5) * TILE, locked: depth < MAX_FLOOR };
+      // 无尽地牢：楼梯永远上锁，必须放倒本层层主才能下去
+      this.stairs = { x: (f.stairs.x + 0.5) * TILE, y: (f.stairs.y + 0.5) * TILE, locked: true };
       this.stairsTile = f.stairs;
+      // 本层的强度基准：按玩家当前面板 DPS 决定怪物血量跟随到哪一档
+      this.threat = this.threatMul();
 
       // 可放置点：离出生点足够远，且必须和玩家处在同一连通区域。
       // 隐藏房只通过裂墙相连，BFS 到不了，敌人若生在里面会永远出不来。
@@ -324,15 +358,19 @@
       };
       const at = (s) => ({ x: (s.x + 0.5) * TILE, y: (s.y + 0.5) * TILE });
 
-      // 敌人：数量随层数上升，但彼此至少隔开 3 格，不会在一片空场里堆成一团
+      // 敌人：数量随层数上升（封顶 22），按层解锁新种类
       const pool =
         depth <= 1
           ? ['slime', 'rat', 'rat', 'slime']
           : depth <= 2
             ? ['slime', 'rat', 'archer', 'slime', 'rat']
             : depth <= 4
-              ? ['slime', 'rat', 'archer', 'brute', 'rat']
-              : ['brute', 'archer', 'slime', 'brute'];
+              ? ['slime', 'rat', 'archer', 'brute', 'wraith']
+              : depth <= 7
+                ? ['slime', 'rat', 'archer', 'brute', 'wraith', 'bomber']
+                : depth <= 11
+                  ? ['rat', 'archer', 'brute', 'wraith', 'bomber', 'golem']
+                  : ['archer', 'brute', 'wraith', 'bomber', 'golem', 'golem'];
       const count = Math.min(22, 7 + depth * 3);
       for (let i = 0; i < count; i++) {
         const s = takeSpot(3);
@@ -342,8 +380,8 @@
         this.spawnEnemy(type, pos.x, pos.y);
       }
 
-      // 层主 / 最终 Boss 守在楼梯旁（先找一个真正站得下的位置，别塞进墙里）
-      const bossType = depth === MAX_FLOOR ? 'overlord' : 'master';
+      // 层主守在楼梯旁；每 5 层是深渊领主（半血召唤援军）
+      const bossType = depth % 5 === 0 ? 'overlord' : 'master';
       const sx = (f.stairs.x + 0.5) * TILE;
       const sy = (f.stairs.y + 0.5) * TILE;
       // 站在楼梯旁边而不是楼梯格上，并和其他怪保持距离
@@ -361,8 +399,8 @@
         const pos = at(s);
         this.items.push({ id: this.nextId++, x: pos.x, y: pos.y, kind, amount });
       };
-      const goldPiles = 5 + depth;
-      for (let i = 0; i < goldPiles; i++) dropItem('gold', this.rng.int(4, 9) + depth * 2);
+      const goldPiles = Math.min(14, 5 + depth);
+      for (let i = 0; i < goldPiles; i++) dropItem('gold', this.rng.int(4, 9) + Math.min(depth, 12) * 2);
       dropItem('potion');
       dropItem('potion');
       dropItem('chest');
@@ -436,8 +474,8 @@
         x = spot.x;
         y = spot.y;
       }
-      const hpScale = base.final ? 1.1 : 1 + 0.18 * (depth - 1);
-      const atkScale = base.final ? 1.1 : 1 + 0.12 * (depth - 1);
+      const hpScale = (1 + SCALING.hpPerDepth * (depth - 1)) * (this.threat || 1);
+      const atkScale = (1 + SCALING.atkPerDepth * (depth - 1)) * (0.9 + 0.1 * (this.threat || 1));
       const e = {
         id: this.nextId++,
         type,
@@ -450,14 +488,17 @@
         maxHp: Math.round(base.hp * hpScale),
         hp: Math.round(base.hp * hpScale),
         atk: Math.round(base.atk * atkScale),
-        def: base.def + (base.boss ? 0 : Math.floor(depth / 3)),
+        def: base.def + Math.floor((depth - 1) * SCALING.defPerDepth * (base.boss ? 0.4 : 1)),
         speed: base.speed,
-        xp: base.xp,
+        xp: Math.round(base.xp * (1 + SCALING.xpPerDepth * (depth - 1))),
         ranged: !!base.ranged,
         prefer: base.prefer || 0,
         projSpeed: base.projSpeed || 0,
+        splash: base.splash || 0,
+        dodge: base.dodge || 0,
+        knockPlayer: base.knockPlayer || 0,
         boss: !!base.boss,
-        final: !!base.final,
+        summon: !!base.summon,
         attackCd: base.cd,
         cd: this.rng.float() * base.cd,
         awake: false,
@@ -474,6 +515,34 @@
       };
       this.enemies.push(e);
       return e;
+    }
+
+    /**
+     * 估算玩家「面板 DPS」：拿手上所有武器里最高的那把算。
+     * 平均单次伤害 × 出手频率，暴击按期望折算，武器特性给一个粗略权重。
+     */
+    playerDps() {
+      const p = this.player;
+      let best = 0;
+      for (const id of p.weapons) {
+        const w = WEAPONS[id];
+        if (!w) continue;
+        const avgHit = p.atk * w.mult * (1 + p.crit * (0.5 + p.critDmg));
+        let rate = 1 / Math.max(0.05, w.cd * p.cdScale);
+        if (w.trait === 'frenzy') rate *= 1.45;
+        else if (w.trait === 'combo') rate *= 1.22;
+        else if (w.trait === 'pierce') rate *= 1.15;
+        else if (w.trait === 'knockback') rate *= 1.1;
+        best = Math.max(best, avgHit * rate);
+      }
+      return best;
+    }
+
+    /** 玩家相对「第 1 层开局」的强度倍率，用来让怪物血量跟着玩家走 */
+    threatMul() {
+      const dps = this.playerDps();
+      const raw = Math.pow(Math.max(0.5, dps) / SCALING.dpsBase, SCALING.dpsWeight);
+      return clamp(raw, SCALING.dpsMin, SCALING.dpsMax);
     }
 
     /* ---------------- 工具 ---------------- */
@@ -591,6 +660,7 @@
       this.updateProjectiles(dt);
       this.updateItems();
       this.updateSlashes(dt);
+      this.updateBlasts(dt);
 
       this.fovTimer -= dt;
       if (this.fovTimer <= 0) {
@@ -637,13 +707,43 @@
         }
       }
 
-      // 站在解封的楼梯上自动下一层
-      if (!this.stairs.locked && this.depth < MAX_FLOOR) {
+      // 站在解封的楼梯上自动下一层；每到第 3 的倍数层先问一句「还往下吗」
+      if (!this.stairs.locked) {
         if (dist2(p.x, p.y, this.stairs.x, this.stairs.y) < 14 * 14) {
-          this.emit({ type: 'stairs', depth: this.depth + 1 });
-          this.enterFloor(this.depth + 1);
+          const next = this.depth + 1;
+          if (next > REST_EVERY && (next - 1) % REST_EVERY === 0) {
+            this.restPrompt = { reached: this.depth, next };
+            this.paused = true;
+          } else {
+            this.emit({ type: 'stairs', depth: next });
+            this.enterFloor(next);
+          }
         }
       }
+    }
+
+    /** 岔路上选「继续深入」 */
+    continueRun() {
+      const prompt = this.restPrompt;
+      if (!prompt) return false;
+      this.restPrompt = null;
+      this.paused = false;
+      this.emit({ type: 'stairs', depth: prompt.next });
+      this.enterFloor(prompt.next);
+      return true;
+    }
+
+    /** 岔路上选「到此为止」：结算记录后回到标题 */
+    endRun() {
+      if (!this.restPrompt) return false;
+      this.restPrompt = null;
+      this.paused = false;
+      this.meta.best.floor = Math.max(this.meta.best.floor || 0, this.depth);
+      this.meta.best.kills = Math.max(this.meta.best.kills || 0, this.runStats.kills);
+      this.addLog(`你在第 ${this.depth} 层收手，带着 ${this.runStats.crystals} 晶石回到了地面。`);
+      this.screen = 'title';
+      this.emit({ type: 'retire', floor: this.depth, crystals: this.runStats.crystals });
+      return true;
     }
 
     playerAttack() {
@@ -861,6 +961,12 @@
     damageEnemy(e, mult, weapon) {
       const p = this.player;
       const w = weapon || p.weapon;
+      // 速灵：有概率闪掉这一下
+      if (e.dodge && this.rng.chance(e.dodge)) {
+        e.flash = 0.1;
+        this.emit({ type: 'evade', x: e.x, y: e.y });
+        return;
+      }
       const crit = this.rng.chance(p.crit);
       const total = mult * (crit ? 1.5 + p.critDmg : 1);
       const dmg = Math.max(1, Math.round(p.atk * total - e.def * 0.5));
@@ -896,19 +1002,16 @@
       e.dead = true;
       this.runStats.kills++;
       this.player.xp += e.xp;
-      this.emit({ type: 'kill', x: e.x, y: e.y, name: e.name, boss: e.boss, final: e.final });
+      this.emit({ type: 'kill', x: e.x, y: e.y, name: e.name, boss: e.boss, final: e.summon });
 
       if (e.boss) {
-        const gain = e.final ? 25 : 4 + this.depth * 2;
+        // 深渊领主赏格更高
+        const gain = e.summon ? 25 : 4 + this.depth * 2;
         this.meta.crystals += gain;
         this.runStats.crystals += gain;
         this.addLog(`获得 ${gain} 晶石（局外货币）。`);
         this.emit({ type: 'bossDown', x: e.x, y: e.y });
 
-        if (e.final) {
-          this.win();
-          return;
-        }
         this.stairs.locked = false;
         this.addLog('楼梯的封印解除了。');
         const heal = Math.round(this.player.maxHp * 0.25);
@@ -1105,7 +1208,7 @@
           }
         }
 
-        if (e.final && !this.bossSummoned && e.hp < e.maxHp * 0.5) {
+        if (e.summon && !this.bossSummoned && e.hp < e.maxHp * 0.5) {
           this.bossSummoned = true;
           this.addLog('地牢之主发出咆哮，召唤了援军！');
           this.emit({ type: 'summon', x: e.x, y: e.y });
@@ -1146,7 +1249,8 @@
               life: 2.4,
               dmg: e.atk,
               from: 'enemy',
-              r: 4,
+              r: e.splash ? 5 : 4,
+              splash: e.splash || 0,
             });
           }
         } else {
@@ -1249,6 +1353,11 @@
       p.hp -= real;
       p.invuln = 0.55;
       p.hitFlash = 0.3;
+      // 石傀儡：一拳把人打飞
+      if (from && from.knockPlayer) {
+        const ang = Math.atan2(p.y - from.y, p.x - from.x);
+        this.moveBody(p, Math.cos(ang) * from.knockPlayer, Math.sin(ang) * from.knockPlayer);
+      }
       this.emit({ type: 'playerHit', dmg: real, x: p.x, y: p.y, from: from ? from.type : 'unknown' });
       if (p.hp <= 0) this.handleDeath();
     }
@@ -1269,24 +1378,6 @@
       this.meta.best.floor = Math.max(this.meta.best.floor || 0, this.depth);
       this.meta.best.kills = Math.max(this.meta.best.kills || 0, this.runStats.kills);
       this.emit({ type: 'dead' });
-    }
-
-    win() {
-      const bonus = 30;
-      this.meta.crystals += bonus;
-      this.runStats.crystals += bonus;
-      this.meta.wins = (this.meta.wins || 0) + 1;
-      this.meta.best.floor = MAX_FLOOR;
-      this.meta.best.kills = Math.max(this.meta.best.kills || 0, this.runStats.kills);
-      this.screen = 'won';
-      this.winInfo = {
-        floor: this.depth,
-        kills: this.runStats.kills,
-        gold: this.runStats.gold,
-        crystals: this.runStats.crystals,
-        bonus,
-      };
-      this.emit({ type: 'win' });
     }
 
     /* ---------------- 投射物 / 拾取 / 刀光 ---------------- */
@@ -1316,11 +1407,13 @@
           if (t === MapGen.SECRET) {
             // 箭矢也能打穿裂墙；只有玩家的箭算数，敌人的弹丸不会替玩家开路
             if (pr.from === 'player') this.breakWall(tx, ty);
+            if (pr.splash) this.explode(pr);
             this.emit({ type: 'impact', x: pr.x, y: pr.y });
             consumed = true;
             break;
           }
           if (t === MapGen.WALL) {
+            if (pr.splash) this.explode(pr);
             this.emit({ type: 'impact', x: pr.x, y: pr.y });
             consumed = true;
             break;
@@ -1347,6 +1440,12 @@
                 consumed = true;
               }
             }
+          } else if (pr.splash) {
+            // 炸弹直接命中：走爆炸结算，避免和贴身判定重复扣血
+            if (dist2(pr.x, pr.y, p.x, p.y) < (p.hw + pr.r) * (p.hw + pr.r)) {
+              this.explode(pr);
+              consumed = true;
+            }
           } else if (p.invuln <= 0 && dist2(pr.x, pr.y, p.x, p.y) < (p.hw + pr.r) * (p.hw + pr.r)) {
             this.hurtPlayer(pr.dmg, { type: 'bolt' });
             consumed = true;
@@ -1358,6 +1457,19 @@
       this.projectiles = keep;
     }
 
+    /** 炸弹落点爆炸：范围内按距离衰减，越靠近中心越疼 */
+    explode(pr) {
+      const p = this.player;
+      const radius = pr.splash;
+      this.blasts.push({ x: pr.x, y: pr.y, r: radius, life: 0.3, max: 0.3 });
+      this.emit({ type: 'boom', x: pr.x, y: pr.y, r: radius });
+      const d = Math.hypot(pr.x - p.x, pr.y - p.y);
+      const reach = radius + p.hw;
+      if (d > reach) return;
+      const falloff = 1 - 0.55 * (d / reach);
+      this.hurtPlayer(pr.dmg * falloff, { type: 'bomb' });
+    }
+
     updateSlashes(dt) {
       const keep = [];
       for (const s of this.slashes) {
@@ -1365,6 +1477,15 @@
         if (s.life > 0) keep.push(s);
       }
       this.slashes = keep;
+    }
+
+    updateBlasts(dt) {
+      const keep = [];
+      for (const b of this.blasts) {
+        b.life -= dt;
+        if (b.life > 0) keep.push(b);
+      }
+      this.blasts = keep;
     }
 
     updateItems() {
@@ -1648,7 +1769,7 @@
 
     debugGoto(depth) {
       if (this.screen !== 'playing') return;
-      const d = clamp(Number(depth) || 1, 1, MAX_FLOOR);
+      const d = clamp(Number(depth) || 1, 1, 500);
       this.enterFloor(d);
     }
   }
@@ -1657,6 +1778,8 @@
     World,
     TILE,
     MAX_FLOOR,
+    REST_EVERY,
+    SCALING,
     WEAPONS,
     WEAPON_SLOTS,
     BUFFS,

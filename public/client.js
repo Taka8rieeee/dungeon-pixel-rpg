@@ -92,7 +92,7 @@ function loop(now) {
   try {
     if (world) {
       // 自愈：升级暂停却没弹出选项时，强制恢复，避免永久卡住
-      if (world.paused && !world.pending && !world.shop) {
+      if (world.paused && !world.pending && !world.shop && !world.restPrompt) {
         world.paused = false;
         world.pendingLevels = 0;
       }
@@ -140,6 +140,12 @@ document.addEventListener('keydown', (ev) => {
   Sound.unlock();
   const k = ev.key.toLowerCase();
   if (k.startsWith('arrow') || k === ' ') ev.preventDefault();
+
+  if (world && world.restPrompt) {
+    if (k === 'enter' || k === ' ' || k === 'y') world.continueRun();
+    else if (k === 'escape' || k === 'n') world.endRun();
+    return;
+  }
 
   if (world && world.shop) {
     if (k === 'escape') {
@@ -317,6 +323,14 @@ function handleEvent(ev) {
       Sound.play('bossDown');
       kick(8);
       break;
+    case 'boom':
+      Sound.play('boom');
+      addFloater(ev.x, ev.y, '轰！', '#ffb15e', 13);
+      kick(8);
+      break;
+    case 'evade':
+      addFloater(ev.x, ev.y, '闪', '#9be7ff', 10);
+      break;
     case 'revive':
       Sound.play('revive');
       addFloater(ev.x, ev.y, '复活', '#ffd45e', 16);
@@ -386,6 +400,9 @@ const ENEMY_SPRITE = {
   rat: 'rat',
   archer: 'archer',
   brute: 'brute',
+  wraith: 'wraith',
+  golem: 'golem',
+  bomber: 'bomber',
   master: 'boss',
   overlord: 'boss',
 };
@@ -549,6 +566,20 @@ function draw() {
     ctx.stroke();
   }
 
+  // 炸弹爆炸：向外扩开的橙色火环
+  for (const b of w.blasts || []) {
+    const k = 1 - b.life / b.max;
+    const rad = b.r * (0.45 + 0.55 * k);
+    const alpha = Math.max(0, 1 - k) * 0.7;
+    ctx.beginPath();
+    ctx.arc(b.x - cam.x, b.y - cam.y, rad, 0, Math.PI * 2);
+    ctx.fillStyle = `rgba(255,160,60,${(alpha * 0.45).toFixed(3)})`;
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = `rgba(255,214,120,${alpha.toFixed(3)})`;
+    ctx.stroke();
+  }
+
   const psx = p.x - cam.x - TILE / 2;
   const psy = p.y - cam.y - TILE / 2;
   if (p.invuln > 0 && Math.floor(w.t * 20) % 2 === 0) ctx.globalAlpha = 0.5;
@@ -673,7 +704,7 @@ function updateHud() {
   }
 
   const p = world.player;
-  hudFloor.textContent = `第 ${world.depth} 层 / ${Engine.MAX_FLOOR}`;
+  hudFloor.textContent = `第 ${world.depth} 层`;
   const ratio = clamp(p.hp / p.maxHp, 0, 1);
   hpFill.style.width = (ratio * 100).toFixed(1) + '%';
   hpText.textContent = `${Math.max(0, Math.round(p.hp))} / ${p.maxHp}`;
@@ -703,6 +734,17 @@ function escapeHtml(s) {
 
 function updateOverlay() {
   if (!world) return;
+
+  // 每到第 3 层问一次：继续深入还是收手
+  if (world.restPrompt) {
+    const rk = 'rest:' + world.restPrompt.next;
+    if (rk !== lastOverlayKey) {
+      lastOverlayKey = rk;
+      overlayInner.innerHTML = restHtml();
+    }
+    overlay.classList.remove('hidden');
+    return;
+  }
 
   // 商店：可以连续购买，所以不靠「选一个就关」，单独一条显示线
   if (world.shop) {
@@ -739,11 +781,6 @@ function updateOverlay() {
   }
   if (world.screen === 'dead') {
     overlayInner.innerHTML = deadHtml();
-    overlay.classList.remove('hidden');
-    return;
-  }
-  if (world.screen === 'won') {
-    overlayInner.innerHTML = winHtml();
     overlay.classList.remove('hidden');
     return;
   }
@@ -784,7 +821,7 @@ function titleHtml() {
       <button class="start" data-act="start">开始冒险</button>
       <p class="hint">
         WASD 移动 · 鼠标瞄准 · 按住左键攻击 · Q 喝药 · M 静音<br>
-        已冒险 ${meta.runs} 次 · 通关 ${meta.wins} 次 · 最深第 ${meta.best.floor} 层
+        已冒险 ${meta.runs} 次 · 最深抵达第 ${meta.best.floor || 0} 层
       </p>
     </div>`;
 }
@@ -872,18 +909,24 @@ function deadHtml() {
     </div>`;
 }
 
-function winHtml() {
-  const w = world.winInfo || { crystals: 0 };
+function restHtml() {
+  const r = world.restPrompt;
+  const s = world.runStats || { kills: 0, gold: 0, crystals: 0 };
   return `
     <div class="panel">
-      <h2 style="color:#ffd45e">通关！</h2>
+      <h2>第 ${r.reached} 层已清</h2>
       <p class="results">
-        你击败了地牢之主。<br>
-        本局获得晶石 <span class="big-num">${w.crystals}</span>
+        楼梯下面还是黑的，看不到底。<br>
+        现在收手，晶石带走；再往下，就没有回头路了。
       </p>
-      <div class="crystal-big">持有晶石 <b>${world.meta.crystals}</b></div>
-      ${upgradePanel()}
-      <button class="start restart" data-act="start">再来一局（Enter）</button>
+      <p class="results">
+        本局：击杀 <b>${s.kills}</b> · 金币 <b>${s.gold}</b> · 晶石 <span class="big-num">${s.crystals}</span>
+      </p>
+      <div class="rest-actions">
+        <button class="start" data-act="continue">继续深入（Enter）</button>
+        <button class="start ghost" data-act="retire">就此收手（Esc）</button>
+      </div>
+      <p class="hint">历史最深第 ${world.meta.best.floor || 0} 层</p>
     </div>`;
 }
 
@@ -897,6 +940,8 @@ overlay.addEventListener('click', (ev) => {
   else if (act === 'choose') world.resolveChoice(Number(btn.dataset.index));
   else if (act === 'skip') world.skipPending();
   else if (act === 'buy') world.buyShop(Number(btn.dataset.index));
+  else if (act === 'continue') world.continueRun();
+  else if (act === 'retire') world.endRun();
   else if (act === 'leave') world.closeShop();
 });
 
