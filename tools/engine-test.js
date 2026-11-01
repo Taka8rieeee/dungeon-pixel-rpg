@@ -812,6 +812,7 @@ test('站在被跳过的箱子上不会反复弹窗，走开再回来才重新�
 
 test('每层都有商店，货架与价格符合定价', () => {
   let reviveListed = 0;
+  const prices = { item: new Set(), revive: new Set() };
   for (let seed = 1; seed <= 40; seed++) {
     const w = newWorld(11000 + seed);
     const shop = w.items.find((i) => i.kind === 'shop');
@@ -819,17 +820,56 @@ test('每层都有商店，货架与价格符合定价', () => {
     assert.ok(shop.stock.length >= 4 && shop.stock.length <= 5, `货架件数异常：${shop.stock.length}`);
     assert.ok(shop.stock.some((s) => s.kind === 'weapon'), '货架应至少有一把武器');
     for (const s of shop.stock) {
-      const expect = s.kind === 'revive' ? Engine.SHOP_PRICE.revive : Engine.SHOP_PRICE.item;
-      assert.strictEqual(s.price, expect, `${s.name} 价格不对`);
+      const kind = s.kind === 'revive' ? 'revive' : 'item';
+      const base = Engine.shopBasePrice(1, kind);
+      assert.strictEqual(s.price % Engine.SHOP_PRICE.step, 0, `${s.name} 价格应是 ${Engine.SHOP_PRICE.step} 的倍数`);
+      assert.ok(
+        s.price >= base * 0.84 && s.price <= base * 1.16,
+        `${s.name} 价格 ${s.price} 偏离第 1 层基准 ${base} 太多`,
+      );
       assert.strictEqual(s.sold, false);
+      prices[kind].add(s.price);
     }
     if (shop.stock.some((s) => s.kind === 'revive')) reviveListed++;
   }
   assert.ok(reviveListed > 8 && reviveListed < 32, `护符上架率应在 50% 上下，实际 ${reviveListed}/40`);
-  assert.ok(
-    Math.abs(Engine.SHOP_PRICE.item / Engine.SHOP_PRICE.revive - 0.75) < 0.01,
-    '武器与增益应比护符便宜约 25%',
-  );
+  assert.ok(prices.item.size > 1, '武器/增益价格应有浮动，不该是固定一个数');
+  assert.ok(prices.revive.size > 1, '护符价格应有浮动');
+});
+
+test('价格随层数小幅上升，武器与增益始终比护符便宜', () => {
+  for (let d = 1; d <= 5; d++) {
+    const rv = Engine.shopBasePrice(d, 'revive');
+    const it = Engine.shopBasePrice(d, 'item');
+    assert.ok(it < rv, `第 ${d} 层：武器/增益应比护符便宜`);
+    assert.ok(
+      Math.abs(it / rv - 0.75) < 0.02,
+      `第 ${d} 层：武器与增益应约为护符的 75%，实际 ${((it / rv) * 100).toFixed(1)}%`,
+    );
+    if (d > 1) {
+      const prev = Engine.shopBasePrice(d - 1, 'revive');
+      assert.ok(rv > prev, `第 ${d} 层护符基准价应高于第 ${d - 1} 层`);
+      assert.ok(rv - prev <= prev * 0.15, `每层涨幅应是小幅（≤15%），实际 +${((rv / prev - 1) * 100).toFixed(1)}%`);
+    }
+  }
+  // 浮动后仍不能出现「武器比护符贵」的倒挂
+  const swing = Engine.SHOP_PRICE.swing;
+  for (let d = 1; d <= 5; d++) {
+    const itemMax = Engine.shopBasePrice(d, 'item') * (1 + swing);
+    const reviveMin = Engine.shopBasePrice(d, 'revive') * (1 - swing);
+    assert.ok(itemMax < reviveMin, `第 ${d} 层浮动后可能出现武器比护符贵`);
+  }
+});
+
+test('同一层的不同商店价格不完全一样', () => {
+  const seen = new Set();
+  for (let seed = 1; seed <= 25; seed++) {
+    const w = newWorld(16000 + seed);
+    const shop = w.items.find((i) => i.kind === 'shop');
+    for (const s of shop.stock) seen.add(`${s.kind}:${s.price}`);
+  }
+  const itemPrices = new Set([...seen].filter((k) => k.startsWith('weapon') || k.startsWith('buff')).map((k) => k.split(':')[1]));
+  assert.ok(itemPrices.size >= 3, `同一层的武器/增益价格应有多种，实际 ${itemPrices.size} 种`);
 });
 
 test('商店可以买护符、买卖扣钱、钱不够买不了', () => {

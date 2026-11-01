@@ -98,13 +98,25 @@
   const WEAPON_SLOTS = 2;
 
   /**
-   * 商店定价。复活护符是招牌货：攒到第 2 层才买得起，买完基本就买不动别的了；
-   * 武器与增益统一按 75 折定价（便宜 25%）。
+   * 商店定价。
+   * 基准价按层数小幅上浮（每层 +8），每件商品再各自浮动 ±10% 后取整到 5 的倍数，
+   * 所以同一层两次进店看到的价格也不完全一样。
+   * 武器与增益按护符基准价的 75% 定价（便宜 25%），浮动后仍始终低于护符。
    */
   const SHOP_PRICE = {
-    revive: 100,
-    item: 75,
+    reviveBase: 90,
+    revivePerDepth: 8,
+    itemRatio: 0.75,
+    swing: 0.1,
+    step: 5,
   };
+
+  /** 某一层的基准价（未浮动）；depth 从 1 开始 */
+  function shopBasePrice(depth, kind) {
+    const d = Math.max(1, depth | 0);
+    const revive = SHOP_PRICE.reviveBase + (d - 1) * SHOP_PRICE.revivePerDepth;
+    return kind === 'revive' ? revive : Math.round(revive * SHOP_PRICE.itemRatio);
+  }
 
   /** 宝箱里除了新武器，还能换到的增益 */
   const BUFFS = [
@@ -1498,6 +1510,13 @@
       return true;
     }
 
+    /** 单件商品价格：在基准价上浮动 ±12%，取整到 5 的倍数 */
+    rollPrice(base) {
+      const k = 1 + (this.rng.float() * 2 - 1) * SHOP_PRICE.swing;
+      const step = SHOP_PRICE.step;
+      return Math.max(step, Math.round((base * k) / step) * step);
+    }
+
     /** 商店上架：两件武器 + 两个增益，另有 50% 概率摆一个生命护符 */
     rollShopStock() {
       const p = this.player;
@@ -1506,6 +1525,8 @@
         Object.keys(WEAPONS).filter((id) => id !== 'starter' && !p.weapons.includes(id)),
       );
       const buffs = this.rng.shuffle(BUFFS.slice());
+      // 价格跟着层数走，每件再单独浮动
+      const itemBase = shopBasePrice(this.depth, 'item');
 
       for (let i = 0; i < 2 && i < fresh.length; i++) {
         const id = fresh[i];
@@ -1514,7 +1535,7 @@
           id,
           name: WEAPONS[id].name,
           desc: WEAPONS[id].desc,
-          price: SHOP_PRICE.item,
+          price: this.rollPrice(itemBase),
           sold: false,
         });
       }
@@ -1522,7 +1543,14 @@
       const need = 4 - stock.length;
       for (let i = 0; i < Math.max(2, need) && i < buffs.length; i++) {
         const b = buffs[i];
-        stock.push({ kind: 'buff', id: b.id, name: b.name, desc: b.desc, price: SHOP_PRICE.item, sold: false });
+        stock.push({
+          kind: 'buff',
+          id: b.id,
+          name: b.name,
+          desc: b.desc,
+          price: this.rollPrice(itemBase),
+          sold: false,
+        });
       }
       if (p.revive <= 0 && this.rng.chance(0.5)) {
         stock.push({
@@ -1530,7 +1558,7 @@
           id: 'revive',
           name: '生命护符',
           desc: '死亡时自动复活一次（买下后常驻背包）',
-          price: SHOP_PRICE.revive,
+          price: this.rollPrice(shopBasePrice(this.depth, 'revive')),
           sold: false,
         });
       }
@@ -1633,6 +1661,7 @@
     WEAPON_SLOTS,
     BUFFS,
     SHOP_PRICE,
+    shopBasePrice,
     ENEMY_TYPES,
     META_COST,
     META_MAX,
