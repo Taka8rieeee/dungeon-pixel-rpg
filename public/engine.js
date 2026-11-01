@@ -23,6 +23,17 @@
    *   frenzy   连续命中越打越快
    */
   const WEAPONS = {
+    starter: {
+      id: 'starter',
+      name: '旧木棒',
+      kind: 'melee',
+      mult: 0.7,
+      cd: 0.45,
+      reach: 20,
+      arc: 1.0,
+      trait: null,
+      desc: '开局凑合用的破木棒，趁早换掉',
+    },
     sword: {
       id: 'sword',
       name: '铁剑',
@@ -83,8 +94,8 @@
     },
   };
 
-  /** 开场只能三选一，战锤与匕首靠宝箱获得 */
-  const STARTER_WEAPONS = ['sword', 'spear', 'bow'];
+  /** 武器栏只有两格；开局只有一根破木棒，好武器得进去抢 */
+  const WEAPON_SLOTS = 2;
 
   /** 宝箱里除了新武器，还能换到的增益 */
   const BUFFS = [
@@ -188,9 +199,9 @@
         gold: 0,
         potion: 1,
         revive: 0,
-        weapons: ['sword'],
+        weapons: ['starter'],
         weaponIndex: 0,
-        weapon: WEAPONS.sword,
+        weapon: WEAPONS.starter,
         combo: 0,
         frenzy: 0,
         frenzyTimer: 0,
@@ -204,16 +215,7 @@
       this.player.hp = this.player.maxHp;
 
       this.enterFloor(1);
-
-      // 开局三选一：先挑一把顺手的，选完才真正开始
-      this.pendingKind = 'starter';
-      this.pending = this.rng.shuffle(STARTER_WEAPONS).map((id) => ({
-        kind: 'weapon',
-        id,
-        name: WEAPONS[id].name,
-        desc: WEAPONS[id].desc,
-      }));
-      this.paused = true;
+      this.addLog('你只摸到一根旧木棒，往里走吧。');
     }
 
     enterFloor(depth) {
@@ -694,12 +696,104 @@
       return this.switchWeapon(next);
     }
 
-    addWeapon(id) {
+    /**
+     * 获得武器时按栏位规则处理：
+     *   1. 手上只有旧木棒 → 直接换掉（木棒不占正式栏位）
+     *   2. 还有空位 → 放入空位
+     *   3. 两格都满 → 顶掉当前手持的那把，旧武器掉在地上，随时能捡回来
+     */
+    gainWeapon(id) {
       const p = this.player;
-      if (!WEAPONS[id] || p.weapons.includes(id)) return false;
-      p.weapons.push(id);
-      this.switchWeapon(p.weapons.length - 1);
+      const w = WEAPONS[id];
+      if (!w || id === 'starter' || p.weapons.includes(id)) return false;
+
+      if (p.weapons.length === 1 && p.weapons[0] === 'starter') {
+        p.weapons = [id];
+        p.weaponIndex = 0;
+        p.weapon = w;
+        p.cd = 0;
+        this.addLog(`换下旧木棒，拿起「${w.name}」！`);
+        this.emit({ type: 'swap', weapon: id });
+        return true;
+      }
+
+      if (p.weapons.length < WEAPON_SLOTS) {
+        p.weapons.push(id);
+        this.switchWeapon(p.weapons.length - 1);
+        this.addLog(`获得武器「${w.name}」。`);
+        return true;
+      }
+
+      const dropIdx = Math.min(p.weaponIndex, p.weapons.length - 1);
+      const dropId = p.weapons[dropIdx];
+      p.weapons[dropIdx] = id;
+      p.weapon = w;
+      p.combo = 0;
+      p.frenzy = 0;
+      p.frenzyTimer = 0;
+      p.cd = 0.2;
+      this.dropWeapon(dropId, p.x, p.y);
+      this.addLog(`丢下「${WEAPONS[dropId].name}」，换上「${w.name}」。`);
+      this.emit({ type: 'swap', weapon: id });
       return true;
+    }
+
+    /** 把武器扔在地上（按 E 可以再捡回来） */
+    dropWeapon(id, x, y) {
+      if (!WEAPONS[id] || id === 'starter') return;
+      const spot = this.findFreeSpot(x, y, 2, 2);
+      this.items.push({ id: this.nextId++, x: spot.x, y: spot.y, kind: 'weapon', weaponId: id });
+    }
+
+    /** 捡起脚边掉落的武器 */
+    pickupWeaponNearby() {
+      const p = this.player;
+      let best = null;
+      let bestD = 30 * 30;
+      for (const it of this.items) {
+        if (it.kind !== 'weapon') continue;
+        const d2 = dist2(it.x, it.y, p.x, p.y);
+        if (d2 < bestD) {
+          bestD = d2;
+          best = it;
+        }
+      }
+      if (!best) return false;
+      this.takeGroundWeapon(best);
+      return true;
+    }
+
+    takeGroundWeapon(item) {
+      const p = this.player;
+      const id = item.weaponId;
+      const w = WEAPONS[id];
+      if (!w) return;
+      this.items = this.items.filter((it) => it.id !== item.id);
+
+      if (p.weapons.includes(id)) {
+        this.switchWeapon(p.weapons.indexOf(id));
+        this.addLog(`重新拿起「${w.name}」。`);
+        return;
+      }
+
+      const idx = Math.min(p.weaponIndex, p.weapons.length - 1);
+      const dropId = p.weapons[idx];
+      p.weapons[idx] = id;
+      p.weaponIndex = idx;
+      p.weapon = w;
+      p.combo = 0;
+      p.frenzy = 0;
+      p.frenzyTimer = 0;
+      p.cd = 0.2;
+
+      // 换下来的那把留在原地；旧木棒不落地
+      if (dropId !== 'starter') {
+        this.items.push({ id: this.nextId++, x: item.x, y: item.y, kind: 'weapon', weaponId: dropId });
+        this.addLog(`拾起「${w.name}」，放下「${WEAPONS[dropId].name}」。`);
+      } else {
+        this.addLog(`拾起「${w.name}」。`);
+      }
+      this.emit({ type: 'swap', weapon: id });
     }
 
     /** 把指定格子的裂墙打穿；不是裂墙就返回 false */
@@ -809,17 +903,7 @@
       const p = this.player;
 
       if (pick.kind === 'weapon') {
-        if (this.pendingKind === 'starter') {
-          // 开局三选一：直接成为第一把武器
-          p.weapons = [pick.id];
-          p.weaponIndex = 0;
-          p.weapon = WEAPONS[pick.id];
-          p.cd = 0;
-          this.addLog(`拿起了「${pick.name}」：${pick.desc}`);
-        } else {
-          this.addWeapon(pick.id);
-          this.addLog(`获得武器「${pick.name}」：${pick.desc}`);
-        }
+        this.gainWeapon(pick.id);
         this.emit({ type: 'upgrade', id: pick.id });
       } else if (pick.kind === 'buff') {
         const buff = BUFFS.find((b) => b.id === pick.id);
@@ -1245,6 +1329,11 @@
       const p = this.player;
       const keep = [];
       for (const it of this.items) {
+        // 掉在地上的武器要按 E 主动捡，不自动拾取，避免来回换
+        if (it.kind === 'weapon') {
+          keep.push(it);
+          continue;
+        }
         if (dist2(it.x, it.y, p.x, p.y) >= 13 * 13) {
           keep.push(it);
           continue;
@@ -1291,11 +1380,17 @@
     /** 宝箱：暂停游戏，在新武器与增益之间挑一个（最多三个选项） */
     openChest(item) {
       const p = this.player;
-      const fresh = Object.keys(WEAPONS).filter((id) => !p.weapons.includes(id));
+      // 旧木棒是开局垃圾，永远不该出现在宝箱选项里
+      const fresh = Object.keys(WEAPONS).filter((id) => id !== 'starter' && !p.weapons.includes(id));
       const options = [];
 
+      const full = p.weapons.length >= WEAPON_SLOTS;
+      const rawStick = p.weapons.length === 1 && p.weapons[0] === 'starter';
       for (const id of this.rng.shuffle(fresh).slice(0, 2)) {
-        options.push({ kind: 'weapon', id, name: WEAPONS[id].name, desc: WEAPONS[id].desc });
+        let note = '';
+        if (full) note = `（顶替手上的${p.weapon.name}，旧武器会掉在地上）`;
+        else if (rawStick) note = '（换掉旧木棒）';
+        options.push({ kind: 'weapon', id, name: WEAPONS[id].name, desc: WEAPONS[id].desc + note });
       }
       // 武器全收齐了就多给一个增益选项
       const buffCount = options.length === 0 ? 2 : 1;
@@ -1354,7 +1449,7 @@
     TILE,
     MAX_FLOOR,
     WEAPONS,
-    STARTER_WEAPONS,
+    WEAPON_SLOTS,
     BUFFS,
     ENEMY_TYPES,
     META_COST,

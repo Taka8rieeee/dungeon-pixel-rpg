@@ -160,6 +160,7 @@ document.addEventListener('keydown', (ev) => {
     return;
   }
   if (k === 'q') world.usePotion();
+  else if (k === 'e') world.pickupWeaponNearby();
   else if (k === 'm') Sound.toggle();
 });
 
@@ -440,7 +441,29 @@ function draw() {
 
   for (const it of w.items) {
     if (!visibleAt(it.x, it.y)) continue;
-    sprite(ITEM_SPRITE[it.kind] || 'chest', it.x - cam.x - TILE / 2, it.y - cam.y - TILE / 2);
+    const ix = it.x - cam.x - TILE / 2;
+    const iy = it.y - cam.y - TILE / 2;
+
+    if (it.kind === 'weapon') {
+      // 地上的武器：宝箱图标 + 蓝色标记 + 名字首字，和普通宝箱区分开
+      sprite('chest', ix, iy);
+      ctx.fillStyle = 'rgba(120,200,255,0.9)';
+      ctx.fillRect(ix + 2, iy + TILE - 3, TILE - 4, 2);
+      const wn = Engine.WEAPONS[it.weaponId] ? Engine.WEAPONS[it.weaponId].name : '?';
+      ctx.font = 'bold 9px ui-monospace, Consolas, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+      ctx.strokeText(wn.slice(0, 1), ix + TILE / 2, iy - 4);
+      ctx.fillStyle = '#8fd4ff';
+      ctx.fillText(wn.slice(0, 1), ix + TILE / 2, iy - 4);
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
+      continue;
+    }
+
+    sprite(ITEM_SPRITE[it.kind] || 'chest', ix, iy);
   }
 
   for (const e of w.enemies) {
@@ -515,6 +538,41 @@ function draw() {
   drawFloaters();
   drawHurtFlash();
   drawCrosshair();
+  drawWeaponHint();
+}
+
+/** 脚下有掉落的武器时，给个「按 E 拾取」的提示 */
+function drawWeaponHint() {
+  const w = world;
+  if (!w || w.screen !== 'playing' || !w.player) return;
+  const p = w.player;
+  let near = null;
+  for (const it of w.items) {
+    if (it.kind !== 'weapon') continue;
+    if (Math.hypot(it.x - p.x, it.y - p.y) < 30) {
+      near = it;
+      break;
+    }
+  }
+  if (!near) return;
+
+  const name = Engine.WEAPONS[near.weaponId] ? Engine.WEAPONS[near.weaponId].name : '武器';
+  const text = `E  拾起「${name}」`;
+  ctx.font = 'bold 11px ui-monospace, Consolas, monospace';
+  const boxW = ctx.measureText(text).width + 22;
+  const bx = canvas.width / 2 - boxW / 2;
+  const by = canvas.height - 46;
+  ctx.fillStyle = 'rgba(8,10,16,0.8)';
+  ctx.fillRect(bx, by, boxW, 20);
+  ctx.strokeStyle = 'rgba(120,200,255,0.55)';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(bx + 0.5, by + 0.5, boxW - 1, 19);
+  ctx.fillStyle = '#b8e2ff';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, canvas.width / 2, by + 11);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
 }
 
 function drawFloaters() {

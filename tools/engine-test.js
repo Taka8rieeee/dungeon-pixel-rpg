@@ -635,24 +635,75 @@ test('宝箱给出武器与增益二选一，选武器会入库', () => {
   assert.ok(w.pending.some((o) => o.kind === 'buff'), '应有增益选项');
   assert.ok(w.pending.some((o) => o.kind === 'weapon'), '应有武器选项');
 
-  const before = w.player.weapons.length;
   const idx = w.pending.findIndex((o) => o.kind === 'weapon');
+  const wantId = w.pending[idx].id;
   w.resolveChoice(idx);
-  assert.strictEqual(w.player.weapons.length, before + 1, '新武器应加入武器栏');
+  assert.ok(w.player.weapons.includes(wantId), '新武器应在武器栏里');
+  assert.strictEqual(w.player.weapon.id, wantId, '应自动装备新武器');
   assert.strictEqual(w.paused, false);
 });
 
-test('开局三选一，选完才解除暂停', () => {
+test('开局只有一根旧木棒，不弹选择', () => {
   const w = new Engine.World(freshMeta(), 8000);
   w.startRun(8000);
-  assert.strictEqual(w.paused, true, '开局应暂停等待选武器');
-  assert.strictEqual(w.pendingKind, 'starter');
-  assert.strictEqual(w.pending.length, 3, '应给三把武器');
-  const pick = w.pending[1];
-  w.resolveChoice(1);
   assert.strictEqual(w.paused, false);
-  assert.deepStrictEqual(w.player.weapons, [pick.id]);
-  assert.strictEqual(w.player.weapon.id, pick.id);
+  assert.strictEqual(w.pending, null);
+  assert.deepStrictEqual(w.player.weapons, ['starter']);
+  assert.strictEqual(w.player.weapon.id, 'starter');
+  const s = Engine.WEAPONS.starter;
+  const sw = Engine.WEAPONS.sword;
+  assert.ok(s.mult < sw.mult, '初始武器伤害应更低');
+  assert.ok(s.reach < sw.reach, '初始武器范围应更小');
+});
+
+test('拿到第一把武器会直接换掉旧木棒', () => {
+  const w = newWorld(8200);
+  assert.deepStrictEqual(w.player.weapons, ['starter']);
+  w.gainWeapon('sword');
+  assert.deepStrictEqual(w.player.weapons, ['sword'], '木棒应被替换而不是并列');
+  assert.strictEqual(w.player.weapon.id, 'sword');
+});
+
+test('武器栏两格满了会顶掉手持武器，旧武器掉在地上', () => {
+  const w = newWorld(8300);
+  w.gainWeapon('sword');
+  w.gainWeapon('bow');
+  assert.strictEqual(w.player.weapons.length, 2);
+  assert.strictEqual(w.player.weapon.id, 'bow');
+
+  w.gainWeapon('hammer');
+  assert.strictEqual(w.player.weapons.length, 2, '栏位不能超过两格');
+  assert.ok(w.player.weapons.includes('hammer'));
+  const dropped = w.items.filter((it) => it.kind === 'weapon');
+  assert.strictEqual(dropped.length, 1, '旧武器应掉在地上');
+  assert.strictEqual(dropped[0].weaponId, 'bow', '掉的应该是被顶替的那把');
+});
+
+test('地上的武器可以按 E 捡回来', () => {
+  const w = newWorld(8400);
+  w.gainWeapon('sword');
+  w.gainWeapon('bow');
+  w.gainWeapon('hammer');
+  const ground = w.items.find((it) => it.kind === 'weapon');
+  assert.ok(ground, '应有掉落武器');
+  w.player.x = ground.x;
+  w.player.y = ground.y;
+  const ok = w.pickupWeaponNearby();
+  assert.strictEqual(ok, true);
+  assert.ok(w.player.weapons.includes(ground.weaponId), '应捡起掉落的武器');
+  assert.ok(!w.items.some((it) => it.id === ground.id), '地上的那把应消失');
+});
+
+test('地上的武器不会被自动拾取', () => {
+  const w = newWorld(8500);
+  w.gainWeapon('sword');
+  w.gainWeapon('bow');
+  w.gainWeapon('hammer');
+  const ground = w.items.find((it) => it.kind === 'weapon');
+  w.player.x = ground.x;
+  w.player.y = ground.y;
+  for (let i = 0; i < 30; i++) w.tick(0.016, idle());
+  assert.ok(w.items.some((it) => it.id === ground.id), '走过去不应该自动捡起武器');
 });
 
 test('可以在已拥有的武器间切换', () => {
@@ -660,10 +711,8 @@ test('可以在已拥有的武器间切换', () => {
   w.player.weapons = ['sword'];
   w.player.weaponIndex = 0;
   w.player.weapon = Engine.WEAPONS.sword;
-  w.addWeapon('bow');
-  w.addWeapon('hammer');
-  assert.strictEqual(w.player.weapons.length, 3);
-  assert.strictEqual(w.player.weapon.id, 'hammer');
+  w.gainWeapon('bow');
+  assert.strictEqual(w.player.weapons.length, 2);
   w.switchWeapon(0);
   assert.strictEqual(w.player.weapon.id, w.player.weapons[0]);
   w.cycleWeapon(1);
