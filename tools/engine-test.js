@@ -431,6 +431,60 @@ test('药水已满时踩在药水上不会让物品数组暴涨（曾导致 Inva
   );
 });
 
+test('敌人能沿流场绕过 L 形拐角', () => {
+  const w = newWorld(1);
+  const W = w.mapW;
+  for (let i = 0; i < w.tiles.length; i++) w.tiles[i] = MapGen.WALL;
+  // 挖一个 L 形走廊：横向 (5..15, y=5)，纵向 (x=15, y=5..15)
+  for (let x = 5; x <= 15; x++) w.tiles[5 * W + x] = MapGen.FLOOR;
+  for (let y = 5; y <= 15; y++) w.tiles[y * W + 15] = MapGen.FLOOR;
+
+  const p = w.player;
+  p.x = 15.5 * TILE;
+  p.y = 15.5 * TILE;
+  p.invuln = 9999;
+
+  const e = w.enemies[0];
+  e.x = 5.5 * TILE;
+  e.y = 5.5 * TILE;
+  e.awake = true;
+  e.speed = 220;
+  w.enemies = [e];
+
+  const d0 = Math.hypot(e.x - p.x, e.y - p.y);
+  for (let i = 0; i < 400; i++) w.tick(0.016, idle());
+  const d1 = Math.hypot(e.x - p.x, e.y - p.y);
+  assert.ok(d1 < d0 - 120, `没绕过拐角：${d0.toFixed(0)} -> ${d1.toFixed(0)}`);
+});
+
+test('两只敌人挤在单格走廊里不会互相顶死', () => {
+  const w = newWorld(2);
+  const W = w.mapW;
+  for (let i = 0; i < w.tiles.length; i++) w.tiles[i] = MapGen.WALL;
+  const lane = 8;
+  for (let x = 3; x <= 22; x++) w.tiles[lane * W + x] = MapGen.FLOOR;
+
+  const p = w.player;
+  p.x = 21.5 * TILE;
+  p.y = (lane + 0.5) * TILE;
+  p.invuln = 9999;
+
+  const e1 = w.enemies[0];
+  const e2 = w.enemies[1];
+  e1.x = 4.5 * TILE;
+  e1.y = (lane + 0.5) * TILE;
+  e2.x = 6.5 * TILE;
+  e2.y = (lane + 0.5) * TILE;
+  e1.awake = e2.awake = true;
+  e1.speed = e2.speed = 90;
+  w.enemies = [e1, e2];
+
+  const d0 = Math.hypot(e1.x - p.x, e1.y - p.y);
+  for (let i = 0; i < 400; i++) w.tick(0.016, idle());
+  const d1 = Math.hypot(e1.x - p.x, e1.y - p.y);
+  assert.ok(d1 < d0 - 100, `前面的敌人被同伙顶住了：${d0.toFixed(0)} -> ${d1.toFixed(0)}`);
+});
+
 console.log('实时引擎测试：');
 let failed = 0;
 for (const [mark, name] of results) {

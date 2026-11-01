@@ -68,6 +68,8 @@
       this.t = 0;
       this.depth = 1;
       this.fovTimer = 0;
+      this.flow = null;
+      this.flowTimer = 0;
       this.nextId = 1;
     }
 
@@ -136,6 +138,8 @@
       this.slashes = [];
       this.bossSummoned = false;
       this.fovTimer = 0;
+      this.flow = null;
+      this.flowTimer = 0;
 
       const p = this.player;
       p.x = (f.start.x + 0.5) * TILE;
@@ -399,6 +403,13 @@
       this.t += dt;
 
       this.updatePlayer(dt, input);
+
+      this.flowTimer -= dt;
+      if (this.flowTimer <= 0) {
+        this.updateFlow();
+        this.flowTimer = 0.22;
+      }
+
       this.updateEnemies(dt);
       this.updateProjectiles(dt);
       this.updateItems();
@@ -598,13 +609,87 @@
 
     /* ---------------- 敌人 ---------------- */
 
+    /**
+     * 从玩家所在格做一次 BFS，得到整层的「离玩家步数」距离场。
+     * 敌人不在视线内时沿这个场下坡走，就能自动绕过拐角和墙，而不是贴着墙原地顶。
+     */
+    updateFlow() {
+      const W = this.mapW;
+      const H = this.mapH;
+      const dist = new Int16Array(W * H).fill(-1);
+      const pt = this.playerTile();
+      if (pt.x < 0 || pt.y < 0 || pt.x >= W || pt.y >= H) {
+        this.flow = dist;
+        return;
+      }
+      const start = pt.y * W + pt.x;
+      dist[start] = 0;
+      const queue = [start];
+      for (let head = 0; head < queue.length; head++) {
+        const i = queue[head];
+        const x = i % W;
+        const y = (i - x) / W;
+        for (const [dx, dy] of MapGen.DIRS) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+          const j = ny * W + nx;
+          if (dist[j] !== -1 || this.isSolidTile(nx, ny)) continue;
+          dist[j] = dist[i] + 1;
+          queue.push(j);
+        }
+      }
+      this.flow = dist;
+    }
+
+    /** 沿距离场往玩家方向下坡，返回单位方向向量 */
+    flowDir(e) {
+      const W = this.mapW;
+      const tx = Math.floor(e.x / TILE);
+      const ty = Math.floor(e.y / TILE);
+      const fallback = () => {
+        const dx = this.player.x - e.x;
+        const dy = this.player.y - e.y;
+        const d = Math.hypot(dx, dy) || 1;
+        return { x: dx / d, y: dy / d };
+      };
+      if (!this.flow || tx < 0 || ty < 0 || tx >= W || ty >= this.mapH) return fallback();
+      const cur = this.flow[ty * W + tx];
+      if (cur < 0) return fallback();
+
+      let bestX = -1;
+      let bestY = -1;
+      let bestD = cur;
+      for (const [dx, dy] of MapGen.DIRS) {
+        const nx = tx + dx;
+        const ny = ty + dy;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= this.mapH) continue;
+        const v = this.flow[ny * W + nx];
+        if (v < 0 || v >= bestD) continue;
+        bestD = v;
+        bestX = nx;
+        bestY = ny;
+      }
+      if (bestX < 0) return fallback();
+
+      const cx = (bestX + 0.5) * TILE;
+      const cy = (bestY + 0.5) * TILE;
+      const dx = cx - e.x;
+      const dy = cy - e.y;
+      const d = Math.hypot(dx, dy) || 1;
+      return { x: dx / d, y: dy / d };
+    }
+
     updateEnemies(dt) {
       const p = this.player;
       const alive = [];
       for (const e of this.enemies) {
-        if (e.dead) continue;
-        alive.push(e);
+        if (!e.dead) alive.push(e);
+      }
+      if (!alive.length) return;
 
+      // 阶段一：决定每个敌人「想往哪走」
+      for (const e of alive) {
         if (e.flash > 0) e.flash -= dt;
         if (e.cd > 0) e.cd -= dt;
 
@@ -614,7 +699,11 @@
 
         if (!e.awake) {
           if (d < 240) e.awake = true;
-          else continue;
+          else {
+            e.dirX = 0;
+            e.dirY = 0;
+            continue;
+          }
         }
 
         if (e.final && !this.bossSummoned && e.hp < e.maxHp * 0.5) {
@@ -629,14 +718,25 @@
 
         const ux = dx / d;
         const uy = dy / d;
+        const clear = this.hasLine(e.x, e.y, p.x, p.y);
 
         if (e.ranged) {
-          if (d < e.prefer - 25) {
-            this.moveBody(e, -ux * e.speed * dt, -uy * e.speed * dt);
+          if (!clear && d > 90) {
+            // 看不见玩家就先绕路，走到能射的位置
+            const s = this.flowDir(e);
+            e.dirX = s.x;
+            e.dirY = s.y;
+          } else if (d < e.prefer - 25) {
+            e.dirX = -ux;
+            e.dirY = -uy;
           } else if (d > e.prefer + 35) {
-            this.moveBody(e, ux * e.speed * dt, uy * e.speed * dt);
+            e.dirX = ux;
+            e.dirY = uy;
+          } else {
+            e.dirX = 0;
+            e.dirY = 0;
           }
-          if (d < 300 && e.cd <= 0 && this.hasLine(e.x, e.y, p.x, p.y)) {
+          if (d < 300 && e.cd <= 0 && clear) {
             e.cd = e.attackCd;
             const ang = Math.atan2(dy, dx);
             this.projectiles.push({
@@ -653,31 +753,78 @@
         } else {
           const stopAt = e.r + p.hw + 1;
           if (d > stopAt) {
-            this.moveBody(e, ux * e.speed * dt, uy * e.speed * dt);
-          } else if (e.cd <= 0) {
-            e.cd = e.attackCd;
-            this.hurtPlayer(e.atk, e);
+            if (clear) {
+              e.dirX = ux;
+              e.dirY = uy;
+            } else {
+              const s = this.flowDir(e);
+              e.dirX = s.x;
+              e.dirY = s.y;
+            }
+          } else {
+            e.dirX = 0;
+            e.dirY = 0;
+            if (e.cd <= 0) {
+              e.cd = e.attackCd;
+              this.hurtPlayer(e.atk, e);
+            }
           }
         }
       }
 
-      // 敌我分离，避免叠成一坨
-      for (let i = 0; i < alive.length; i++) {
-        const a = alive[i];
-        for (let j = i + 1; j < alive.length; j++) {
-          const b = alive[j];
-          const dx = b.x - a.x;
-          const dy = b.y - a.y;
-          const min = a.r + b.r;
+      // 阶段二：叠加分离力后统一移动。
+      // 分离只作为「方向偏置」，不再直接对推两个实体，狭窄走廊里才不会互相顶死。
+      for (const e of alive) {
+        let sx = 0;
+        let sy = 0;
+        for (const o of alive) {
+          if (o === e) continue;
+          const dx = e.x - o.x;
+          const dy = e.y - o.y;
+          const min = e.r + o.r;
           const d2 = dx * dx + dy * dy;
-          if (d2 > min * min || d2 < 0.001) continue;
+          if (d2 > min * min || d2 < 0.01) continue;
           const d = Math.sqrt(d2);
-          const push = (min - d) * 0.5;
-          const nx = dx / d;
-          const ny = dy / d;
-          this.moveBody(a, -nx * push, -ny * push);
-          this.moveBody(b, nx * push, ny * push);
+          const push = 1 - d / min;
+          sx += (dx / d) * push;
+          sy += (dy / d) * push;
         }
+
+        let mx = e.dirX + sx * 0.9;
+        let my = e.dirY + sy * 0.9;
+
+        // 分离力若与前进方向相反，只保留垂直分量。
+        // 否则在只能容一人的走廊里，后排会把前排往后顶，两只怪一起卡死。
+        const dlen = Math.hypot(e.dirX, e.dirY);
+        if (dlen > 0.01) {
+          const nx = e.dirX / dlen;
+          const ny = e.dirY / dlen;
+          const back = (sx * nx + sy * ny) * 0.9;
+          if (back < 0) {
+            mx -= nx * back;
+            my -= ny * back;
+          }
+        }
+
+        // 卡住检测：连续一段时间几乎没位移，就侧向绕一小步打破僵局
+        const moved = Math.hypot(e.x - (e.px === undefined ? e.x : e.px), e.y - (e.py === undefined ? e.y : e.py));
+        if (moved < 0.25) {
+          e.stuck = (e.stuck || 0) + dt;
+        } else {
+          e.stuck = 0;
+          e.side = 0;
+        }
+        if (e.stuck > 0.45) {
+          if (!e.side) e.side = this.rng.chance(0.5) ? 1 : -1;
+          mx += -e.dirY * e.side * 1.5;
+          my += e.dirX * e.side * 1.5;
+        }
+        e.px = e.x;
+        e.py = e.y;
+
+        const len = Math.hypot(mx, my);
+        if (len < 0.001) continue;
+        this.moveBody(e, (mx / len) * e.speed * dt, (my / len) * e.speed * dt);
       }
     }
 
