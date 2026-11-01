@@ -399,9 +399,35 @@ function setupTouch() {
     stage.appendChild(b);
     return b;
   };
-  mkBtn('药', () => world.usePotion());
-  mkBtn('换', () => world.cycleWeapon(1));
-  mkBtn('捡', () => world.pickupWeaponNearby());
+
+  // 功能按钮绕右摇杆外侧排成弧线（正上 / 左上 / 正左）。
+  // 偏移不写死：按摇杆与按钮的实际渲染尺寸计算，任何屏幕都刚好贴着外圈。
+  const btns = [
+    mkBtn('药', () => world.usePotion()),
+    mkBtn('换', () => world.cycleWeapon(1)),
+    mkBtn('捡', () => world.pickupWeaponNearby()),
+  ];
+  const placeButtons = () => {
+    const r = aimStick.base.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    const gap = 14; // 与摇杆边缘的间隙（圆边到圆边）
+    const br = btns[0].getBoundingClientRect().width / 2;
+    const dist = r.width / 2 + br + gap;
+    const angles = [90, 135, 180]; // 度：正上 / 左上 / 正左
+    btns.forEach((b, i) => {
+      const a = (angles[i] * Math.PI) / 180;
+      const bx = cx + Math.cos(a) * dist;
+      const by = cy - Math.sin(a) * dist;
+      b.style.left = `${(bx - br).toFixed(1)}px`;
+      b.style.top = `${(by - br).toFixed(1)}px`;
+      b.style.right = 'auto';
+      b.style.bottom = 'auto';
+    });
+  };
+  placeButtons();
+  window.addEventListener('resize', placeButtons);
+  window.addEventListener('orientationchange', () => setTimeout(placeButtons, 120));
 }
 
 /* ---------------- 相机 ---------------- */

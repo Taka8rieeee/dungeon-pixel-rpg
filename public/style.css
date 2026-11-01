@@ -67,11 +67,10 @@ body {
 
 .touch-btn {
   position: fixed;
-  right: 12vmin;
   width: 13vmin;
   height: 13vmin;
-  max-width: 68px;
-  max-height: 68px;
+  max-width: 64px;
+  max-height: 64px;
   min-width: 48px;
   min-height: 48px;
   border-radius: 50%;
@@ -93,23 +92,7 @@ body.touch .touch-btn {
   display: flex;
 }
 
-/* 功能按钮绕右摇杆外侧排成弧线：正上 / 左上 / 正左，
-   间距按「摇杆半径 74px + 按钮半径 32px」计算，保证不与摇杆重叠 */
-
-body.touch .touch-btn:nth-of-type(1) {
-  bottom: calc(9vh + 190px);
-  right: calc(9vmin + 42px);
-}
-
-body.touch .touch-btn:nth-of-type(2) {
-  bottom: calc(9vh + 147px);
-  right: calc(9vmin + 147px);
-}
-
-body.touch .touch-btn:nth-of-type(3) {
-  bottom: calc(9vh + 42px);
-  right: calc(9vmin + 254px);
-}
+/* 功能按钮的具体位置由 client.js 按摇杆实际尺寸动态计算（弧形，紧贴外圈） */
 
 
 body {
