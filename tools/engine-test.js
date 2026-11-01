@@ -412,6 +412,25 @@ test('高速箭矢不会穿过墙壁', () => {
   }
 });
 
+test('药水已满时踩在药水上不会让物品数组暴涨（曾导致 Invalid array length）', () => {
+  const w = newWorld(5150);
+  clearAround(w, 2);
+  const p = w.player;
+  p.potion = Engine.POTION_CAP;
+  p.invuln = 99;
+  // 在玩家脚下放一瓶药水：每帧都会尝试拾取，但背包已满
+  w.items.push({ id: 999999, x: p.x, y: p.y, kind: 'potion' });
+  const n0 = w.items.length;
+  for (let i = 0; i < 120; i++) {
+    w.tick(0.016, idle());
+    assert.ok(w.items.length <= n0 + 1, `物品数组暴涨到 ${w.items.length}`);
+  }
+  assert.ok(
+    w.items.some((it) => it.kind === 'potion'),
+    '药水满时应该留在原地',
+  );
+});
+
 console.log('实时引擎测试：');
 let failed = 0;
 for (const [mark, name] of results) {

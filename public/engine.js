@@ -803,11 +803,13 @@
       const p = this.player;
       const keep = [];
       for (const it of this.items) {
-        if (dist2(it.x, it.y, p.x, p.y) < 13 * 13) {
-          this.pickup(it);
-        } else {
+        if (dist2(it.x, it.y, p.x, p.y) >= 13 * 13) {
           keep.push(it);
+          continue;
         }
+        // 拾取失败（比如药水已满）就留在原地。绝不能在这里改 this.items：
+        // 正在遍历的数组被 push 会让迭代器原地打转，数组无限增长到 Invalid array length
+        if (!this.pickup(it)) keep.push(it);
       }
       this.items = keep;
     }
@@ -818,14 +820,15 @@
         p.gold += item.amount;
         this.runStats.gold += item.amount;
         this.emit({ type: 'pickup', kind: 'gold', amount: item.amount, x: item.x, y: item.y });
-      } else if (item.kind === 'potion') {
-        if (p.potion >= POTION_CAP) {
-          this.items.push(item);
-          return;
-        }
+        return true;
+      }
+      if (item.kind === 'potion') {
+        if (p.potion >= POTION_CAP) return false;
         p.potion++;
         this.emit({ type: 'pickup', kind: 'potion', x: item.x, y: item.y });
-      } else if (item.kind === 'revive') {
+        return true;
+      }
+      if (item.kind === 'revive') {
         if (p.revive > 0) {
           p.gold += 20;
           this.emit({ type: 'pickup', kind: 'gold', amount: 20, x: item.x, y: item.y });
@@ -834,13 +837,17 @@
           this.emit({ type: 'pickup', kind: 'revive', x: item.x, y: item.y });
           this.addLog('获得「生命护符」：死亡时自动复活一次！');
         }
-      } else if (item.kind === 'chest') {
+        return true;
+      }
+      if (item.kind === 'chest') {
         const options = Object.values(WEAPONS).filter((w) => w.id !== p.weapon.id);
         const w = this.rng.pick(options);
         p.weapon = w;
         this.addLog(`打开宝箱，换上「${w.name}」（${w.desc}）。`);
         this.emit({ type: 'pickup', kind: 'chest', weapon: w.id, x: item.x, y: item.y });
+        return true;
       }
+      return true;
     }
 
     usePotion() {
