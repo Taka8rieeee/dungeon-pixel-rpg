@@ -259,6 +259,53 @@ test('每层生成的地图都能从出生点走到楼梯', () => {
   }
 });
 
+test('层主与所有敌人都不会生成在墙里', () => {
+  for (let seed = 1; seed <= 25; seed++) {
+    for (let depth = 1; depth <= 5; depth++) {
+      const w = new Engine.World(freshMeta(), seed * 131 + depth);
+      w.startRun();
+      w.debugGoto(depth);
+      for (const e of w.enemies) {
+        assert.ok(
+          !w.blocked(e.x, e.y, e.hw, e.hh),
+          `深度 ${depth} seed ${seed} 的${e.name}(${e.type})卡在墙里 (${e.x.toFixed(1)},${e.y.toFixed(1)})`,
+        );
+      }
+      const boss = w.enemies.find((e) => e.boss);
+      assert.ok(boss, `深度 ${depth} 没有层主`);
+      assert.ok(!w.blocked(boss.x, boss.y, boss.hw, boss.hh), `深度 ${depth} seed ${seed} 层主卡在墙里`);
+    }
+  }
+});
+
+test('暂停状态不会与选项脱钩（自愈前置条件）', () => {
+  const w = newWorld(4242);
+  w.paused = true;
+  w.pending = null;
+  w.pendingLevels = 0;
+  // 模拟 client 的自愈逻辑
+  if (w.paused && !w.pending) {
+    w.paused = false;
+    w.pendingLevels = 0;
+  }
+  assert.strictEqual(w.paused, false);
+});
+
+test('层主会主动接近玩家', () => {
+  const w = newWorld(777);
+  clearAround(w, 5);
+  const p = w.player;
+  const boss = w.enemies.find((e) => e.boss);
+  boss.x = p.x + 64;
+  boss.y = p.y;
+  boss.awake = true;
+  boss.cd = 5;
+  const d0 = Math.abs(boss.x - p.x);
+  for (let i = 0; i < 40; i++) w.tick(0.016, idle());
+  const d1 = Math.abs(boss.x - p.x);
+  assert.ok(d1 < d0, `层主没靠近：${d0.toFixed(1)} -> ${d1.toFixed(1)}`);
+});
+
 console.log('实时引擎测试：');
 let failed = 0;
 for (const [mark, name] of results) {

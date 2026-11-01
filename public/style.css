@@ -152,6 +152,22 @@ body {
   opacity: 1;
 }
 
+#crash {
+  position: absolute;
+  left: 0.7em;
+  top: 0.7em;
+  max-width: 42em;
+  padding: 0.5em 0.7em;
+  background: rgba(120, 20, 32, 0.92);
+  border: 1px solid #e0455f;
+  color: #ffd9de;
+  font-size: 0.72em;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  pointer-events: none;
+  z-index: 20;
+}
+
 #overlay {
   position: absolute;
   inset: 0;

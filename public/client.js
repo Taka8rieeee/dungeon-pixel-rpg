@@ -71,30 +71,54 @@ async function boot() {
   requestAnimationFrame(loop);
 }
 
+let reportedError = '';
+
+function reportError(err) {
+  console.error(err);
+  const text = (err && (err.stack || err.message)) || String(err);
+  if (reportedError === text) return;
+  reportedError = text;
+  const box = document.getElementById('crash');
+  if (box) {
+    box.textContent = '运行出错（已记录到控制台，游戏会继续尝试运行）\n' + (err && err.message);
+    box.classList.remove('hidden');
+  }
+}
+
 function loop(now) {
   const dt = lastTime ? Math.min(0.05, (now - lastTime) / 1000) : 0.016;
   lastTime = now;
 
-  if (world) {
-    if (world.screen === 'playing' && !world.paused) {
-      world.tick(dt, buildInput());
-    }
-    const evs = world.drainEvents();
-    if (evs.length) consumeEvents(evs);
-    if (world.screen !== 'playing') {
-      saveTimer -= dt;
-      if (saveTimer <= 0) {
-        saveTimer = 3;
-        persistMeta();
+  try {
+    if (world) {
+      // 自愈：升级暂停却没弹出选项时，强制恢复，避免永久卡住
+      if (world.paused && !world.pending) {
+        world.paused = false;
+        world.pendingLevels = 0;
+      }
+      if (world.screen === 'playing' && !world.paused) {
+        world.tick(dt, buildInput());
+      }
+      const evs = world.drainEvents();
+      if (evs.length) consumeEvents(evs);
+      if (world.screen !== 'playing') {
+        saveTimer -= dt;
+        if (saveTimer <= 0) {
+          saveTimer = 3;
+          persistMeta();
+        }
       }
     }
+
+    updateFx(dt);
+    updateCamera(dt);
+    draw();
+    updateHud();
+    updateOverlay();
+  } catch (err) {
+    reportError(err);
   }
 
-  updateFx(dt);
-  updateCamera(dt);
-  draw();
-  updateHud();
-  updateOverlay();
   requestAnimationFrame(loop);
 }
 
@@ -566,18 +590,22 @@ function escapeHtml(s) {
 function updateOverlay() {
   if (!world) return;
 
-  let key = world.screen;
-  if (world.meta) key += `:${world.meta.crystals}:${world.meta.upgrades.hp}:${world.meta.upgrades.atk}`;
-  if (world.pending) key = 'choice:' + world.pending.map((c) => c.id).join(',');
-
-  if (key === lastOverlayKey) return;
-  lastOverlayKey = key;
-
+  // 升级选择优先，且每次都确保遮罩处于可见状态（不能靠 key 缓存决定是否显示）
   if (world.pending) {
-    overlayInner.innerHTML = choiceHtml();
+    const ck = 'choice:' + world.pending.map((c) => c.id).join(',');
+    if (ck !== lastOverlayKey) {
+      lastOverlayKey = ck;
+      overlayInner.innerHTML = choiceHtml();
+    }
     overlay.classList.remove('hidden');
     return;
   }
+
+  let key = world.screen;
+  if (world.meta) key += `:${world.meta.crystals}:${world.meta.upgrades.hp}:${world.meta.upgrades.atk}`;
+
+  if (key === lastOverlayKey) return;
+  lastOverlayKey = key;
   if (world.screen === 'title') {
     overlayInner.innerHTML = titleHtml();
     overlay.classList.remove('hidden');

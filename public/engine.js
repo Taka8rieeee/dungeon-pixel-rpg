@@ -184,11 +184,12 @@
         this.spawnEnemy(type, (spots[cursor].x + 0.5) * TILE, (spots[cursor].y + 0.5) * TILE);
       }
 
-      // 层主 / 最终 Boss 守在楼梯旁
+      // 层主 / 最终 Boss 守在楼梯旁（先找一个真正站得下的位置，别塞进墙里）
       const bossType = depth === MAX_FLOOR ? 'overlord' : 'master';
-      const bx = (f.stairs.x + 0.5) * TILE;
-      const by = (f.stairs.y + 0.5) * TILE;
-      const boss = this.spawnEnemy(bossType, bx + 20, by);
+      const sx = (f.stairs.x + 0.5) * TILE;
+      const sy = (f.stairs.y + 0.5) * TILE;
+      const bossSpot = this.findFreeSpot(sx, sy, 4, Math.min(ENEMY_TYPES[bossType].r, 6));
+      const boss = this.spawnEnemy(bossType, bossSpot.x, bossSpot.y);
       boss.awake = true;
 
       // 物品
@@ -234,9 +235,33 @@
       this.updateFov();
     }
 
+    /** 从指定点向外螺旋找第一个放得下实体（半径 r）的空地，找不到就返回原点 */
+    findFreeSpot(cx, cy, maxR, r) {
+      if (!this.blocked(cx, cy, r, r)) return { x: cx, y: cy };
+      for (let ring = 1; ring <= maxR; ring++) {
+        for (let dy = -ring; dy <= ring; dy++) {
+          for (let dx = -ring; dx <= ring; dx++) {
+            if (Math.abs(dx) !== ring && Math.abs(dy) !== ring) continue;
+            const x = cx + dx * TILE;
+            const y = cy + dy * TILE;
+            if (!this.blocked(x, y, r, r)) return { x, y };
+          }
+        }
+      }
+      return { x: cx, y: cy };
+    }
+
     spawnEnemy(type, x, y) {
       const base = ENEMY_TYPES[type];
       const depth = this.depth;
+      // 物理碰撞盒必须小于一格（16px），否则大块头永远过不了走廊
+      const bodyR = Math.min(base.r, 6);
+      // 出生点如果在墙里，实体永远移不出去，这里先挪到最近的空地
+      if (this.blocked(x, y, bodyR, bodyR)) {
+        const spot = this.findFreeSpot(x, y, 5, bodyR);
+        x = spot.x;
+        y = spot.y;
+      }
       const hpScale = base.final ? 1.1 : 1 + 0.18 * (depth - 1);
       const atkScale = base.final ? 1.1 : 1 + 0.12 * (depth - 1);
       const e = {
@@ -245,8 +270,8 @@
         name: base.name,
         x,
         y,
-        hw: base.r,
-        hh: base.r,
+        hw: bodyR,
+        hh: bodyR,
         r: base.r,
         maxHp: Math.round(base.hp * hpScale),
         hp: Math.round(base.hp * hpScale),
