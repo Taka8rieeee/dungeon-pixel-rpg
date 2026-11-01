@@ -1,5 +1,11 @@
 'use strict';
 
+/* UMD：Node 走 module.exports，浏览器挂到全局 MapGen */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.MapGen = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+
 const W = 48;
 const H = 32;
 
@@ -271,7 +277,7 @@ function generateFloor(rng, depth) {
   return { tiles, rooms: [], start, stairs, secret: null, isCave: false, w: W, h: H };
 }
 
-module.exports = {
+return {
   W,
   H,
   WALL,
@@ -284,3 +290,4 @@ module.exports = {
   generateFloor,
   bfsFrom,
 };
+});

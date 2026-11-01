@@ -1,14 +1,22 @@
 'use strict';
 
+/**
+ * 实时版服务器只做三件事：发静态文件、读写局外存档、留一个截图调试口。
+ * 游戏逻辑全部在 public/engine.js 里，跑在浏览器中。
+ */
+
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const { exec } = require('child_process');
 
-const { Game } = require('./src/game');
-const { loadMeta, saveMeta, resetMeta, defaultMeta } = require('./src/save');
+const { loadMeta, saveMeta, defaultMeta, normalize } = require('./src/save');
 
-const PUBLIC_DIR = path.join(__dirname, 'public');
+const ROOT = __dirname;
+const PUBLIC_DIR = path.join(ROOT, 'public');
+const SRC_DIR = path.join(ROOT, 'src');
+const DATA_DIR = path.join(ROOT, 'data');
+
 const MIME = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
@@ -20,7 +28,6 @@ const MIME = {
 };
 
 let meta = loadMeta();
-const game = new Game(meta, () => saveMeta(meta));
 
 function sendJson(res, code, data) {
   const body = JSON.stringify(data);
@@ -38,7 +45,7 @@ function readBody(req) {
     const chunks = [];
     req.on('data', (chunk) => {
       size += chunk.length;
-      if (size > 1024 * 1024) {
+      if (size > 1024 * 256) {
         reject(new Error('请求体过大'));
         req.destroy();
         return;
@@ -59,50 +66,33 @@ function readBody(req) {
 
 async function handleApi(req, res, pathname) {
   try {
-    if (req.method === 'GET' && pathname === '/api/state') {
-      return sendJson(res, 200, game.getState());
+    if (req.method === 'GET' && pathname === '/api/meta') {
+      return sendJson(res, 200, meta);
     }
 
     if (req.method !== 'POST') return sendJson(res, 405, { error: '只支持 POST' });
 
     const body = await readBody(req);
 
-    if (pathname === '/api/start') {
-      game.startRun();
-      return sendJson(res, 200, game.getState());
+    if (pathname === '/api/meta') {
+      Object.assign(meta, normalize(body));
+      saveMeta(meta);
+      return sendJson(res, 200, { ok: true, meta });
     }
 
-    if (pathname === '/api/action') {
-      return sendJson(res, 200, game.handle(body.action));
-    }
-
-    if (pathname === '/api/choose') {
-      if (game.pending) game.resolveChoice(Number(body.index) || 0);
-      return sendJson(res, 200, game.getState());
-    }
-
-    if (pathname === '/api/upgrade') {
-      return sendJson(res, 200, game.upgradeMeta(String(body.stat || '')));
-    }
-
-    if (pathname === '/api/reset') {
+    if (pathname === '/api/meta/reset') {
       Object.assign(meta, defaultMeta());
       saveMeta(meta);
-      game.meta = meta;
-      return sendJson(res, 200, game.getState());
+      return sendJson(res, 200, { ok: true, meta });
     }
 
-    if (pathname === '/api/debug/goto') {
-      return sendJson(res, 200, game.debugGoto(body.depth));
-    }
-
-    // 开发调试：把浏览器 canvas 截图存到 data/shot.png，方便无头环境下检查画面
+    // 开发调试：把浏览器 canvas 截图存到 data/shot.png
     if (pathname === '/api/debug/shot') {
       const m = /^data:image\/png;base64,(.+)$/.exec(String(body.data || ''));
       if (!m) return sendJson(res, 400, { error: '需要 PNG dataURL' });
       const buf = Buffer.from(m[1], 'base64');
-      fs.mkdirSync(path.join(__dirname, 'data'), { recursive: true });
-      fs.writeFileSync(path.join(__dirname, 'data', 'shot.png'), buf);
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(path.join(DATA_DIR, 'shot.png'), buf);
       return sendJson(res, 200, { ok: true, bytes: buf.length });
     }
 
@@ -114,6 +104,8 @@ async function handleApi(req, res, pathname) {
 
 function serveStatic(res, pathname) {
   let rel = pathname === '/' ? '/index.html' : pathname;
+  let baseDir = PUBLIC_DIR;
+
   try {
     rel = decodeURIComponent(rel);
   } catch (err) {
@@ -121,8 +113,14 @@ function serveStatic(res, pathname) {
     return res.end('Bad Request');
   }
 
-  const filePath = path.join(PUBLIC_DIR, path.normalize(rel));
-  if (!filePath.startsWith(PUBLIC_DIR)) {
+  // 浏览器要直接加载 src/ 下的 UMD 模块（地图生成、视野、随机数）
+  if (rel.startsWith('/src/')) {
+    baseDir = SRC_DIR;
+    rel = rel.slice(4);
+  }
+
+  const filePath = path.normalize(path.join(baseDir, rel));
+  if (!filePath.startsWith(baseDir)) {
     res.writeHead(403);
     return res.end('Forbidden');
   }
@@ -163,7 +161,7 @@ function listen(port, attempt = 0) {
   server.listen(port, '127.0.0.1', () => {
     const url = `http://localhost:${port}`;
     console.log('');
-    console.log('  地牢像素 RPG 已启动');
+    console.log('  地牢像素 RPG（实时版）已启动');
     console.log(`  浏览器打开：${url}`);
     console.log('  按 Ctrl+C 停止');
     console.log('');

@@ -68,4 +68,4 @@ function resetMeta(meta) {
   return meta;
 }
 
-module.exports = { defaultMeta, loadMeta, saveMeta, resetMeta };
+module.exports = { defaultMeta, loadMeta, saveMeta, resetMeta, normalize };

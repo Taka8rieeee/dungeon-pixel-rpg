@@ -23,14 +23,20 @@ const statsEl = document.getElementById('stats');
 
 let atlas = null;
 let atlasImg = null;
-let state = null;
-let busy = false;
+let world = null;
 let lastOverlayKey = '';
+let lastTime = 0;
+let saveTimer = 0;
+
+const keys = { up: false, down: false, left: false, right: false };
+const mouse = { sx: canvas.width / 2, sy: canvas.height / 2, wx: 0, wy: 0, down: false };
+const cam = { x: 0, y: 0 };
 
 const floaters = [];
 let shake = 0;
 let hurtFlash = 0;
-let lastTime = 0;
+
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 /* ---------------- 启动 ---------------- */
 
@@ -60,50 +66,141 @@ async function boot() {
     if (atlasImg.complete && atlasImg.naturalWidth > 0) resolve();
   });
 
-  const initial = await fetch('/api/state').then((r) => r.json());
-  setState(initial);
+  const meta = await fetch('/api/meta').then((r) => r.json());
+  world = new Engine.World(meta);
   requestAnimationFrame(loop);
 }
 
 function loop(now) {
   const dt = lastTime ? Math.min(0.05, (now - lastTime) / 1000) : 0.016;
   lastTime = now;
+
+  if (world) {
+    if (world.screen === 'playing' && !world.paused) {
+      world.tick(dt, buildInput());
+    }
+    const evs = world.drainEvents();
+    if (evs.length) consumeEvents(evs);
+    if (world.screen !== 'playing') {
+      saveTimer -= dt;
+      if (saveTimer <= 0) {
+        saveTimer = 3;
+        persistMeta();
+      }
+    }
+  }
+
   updateFx(dt);
+  updateCamera(dt);
   draw();
+  updateHud();
+  updateOverlay();
   requestAnimationFrame(loop);
 }
 
-/* ---------------- 网络 ---------------- */
+/* ---------------- 输入 ---------------- */
 
-async function post(path, body) {
-  if (busy) return null;
-  busy = true;
-  try {
-    const res = await fetch(path, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body || {}),
-    });
-    const data = await res.json();
-    if (data && data.screen) setState(data);
-    return data;
-  } catch (err) {
-    console.error(err);
-    return null;
-  } finally {
-    busy = false;
+const KEY_MAP = {
+  w: 'up',
+  a: 'left',
+  s: 'down',
+  d: 'right',
+  arrowup: 'up',
+  arrowleft: 'left',
+  arrowdown: 'down',
+  arrowright: 'right',
+};
+
+document.addEventListener('keydown', (ev) => {
+  if (ev.isComposing) return;
+  Sound.unlock();
+  const k = ev.key.toLowerCase();
+  if (k.startsWith('arrow') || k === ' ') ev.preventDefault();
+
+  if (world && world.pending) {
+    if (k >= '1' && k <= '3') world.resolveChoice(Number(k) - 1);
+    return;
   }
+
+  if (world && world.screen !== 'playing') {
+    if (k === 'enter' || k === ' ') startRun();
+    return;
+  }
+
+  if (KEY_MAP[k]) {
+    keys[KEY_MAP[k]] = true;
+    return;
+  }
+  if (k === 'q') world.usePotion();
+  else if (k === 'm') Sound.toggle();
+});
+
+document.addEventListener('keyup', (ev) => {
+  const k = ev.key.toLowerCase();
+  if (KEY_MAP[k]) keys[KEY_MAP[k]] = false;
+});
+
+function pointerPos(ev) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    sx: ((ev.clientX - rect.left) / rect.width) * canvas.width,
+    sy: ((ev.clientY - rect.top) / rect.height) * canvas.height,
+  };
 }
 
-function setState(next) {
-  state = next;
-  if (next && Array.isArray(next.events) && next.events.length) consumeEvents(next.events);
-  updateHud();
-  updateOverlay();
-  draw();
+canvas.addEventListener('mousemove', (ev) => {
+  const p = pointerPos(ev);
+  mouse.sx = p.sx;
+  mouse.sy = p.sy;
+});
+
+canvas.addEventListener('mousedown', (ev) => {
+  if (ev.button === 0) {
+    mouse.down = true;
+    Sound.unlock();
+  }
+});
+
+window.addEventListener('mouseup', (ev) => {
+  if (ev.button === 0) mouse.down = false;
+});
+
+canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
+
+window.addEventListener('blur', () => {
+  keys.up = keys.down = keys.left = keys.right = false;
+  mouse.down = false;
+});
+
+function buildInput() {
+  mouse.wx = cam.x + mouse.sx;
+  mouse.wy = cam.y + mouse.sy;
+  return {
+    up: keys.up,
+    down: keys.down,
+    left: keys.left,
+    right: keys.right,
+    firing: mouse.down,
+    aimX: mouse.wx,
+    aimY: mouse.wy,
+  };
 }
 
-/* ---------------- 表现层：音效 / 飘字 / 震屏 ---------------- */
+/* ---------------- 相机 ---------------- */
+
+function updateCamera(dt) {
+  if (!world || !world.map) return;
+  const p = world.player;
+  const maxX = Math.max(0, world.mapW * TILE - canvas.width);
+  const maxY = Math.max(0, world.mapH * TILE - canvas.height);
+  const tx = clamp(p.x - canvas.width / 2, 0, maxX);
+  const ty = clamp(p.y - canvas.height / 2, 0, maxY);
+  const k = Math.min(1, dt * 14);
+  cam.x += (tx - cam.x) * k;
+  cam.y += (ty - cam.y) * k;
+}
+
+/* ---------------- 表现层 ---------------- */
 
 function consumeEvents(events) {
   for (const ev of events) handleEvent(ev);
@@ -114,15 +211,11 @@ function handleEvent(ev) {
     case 'swing':
       Sound.play('swing');
       break;
+    case 'whiff':
+      break;
     case 'hit':
       Sound.play(ev.crit ? 'crit' : 'hit');
-      addFloater(
-        ev.x,
-        ev.y,
-        ev.crit ? `${ev.dmg}!` : String(ev.dmg),
-        ev.crit ? '#ffd45e' : '#f4f4f8',
-        ev.crit ? 16 : 11,
-      );
+      addFloater(ev.x, ev.y, ev.crit ? `${ev.dmg}!` : String(ev.dmg), ev.crit ? '#ffd45e' : '#f4f4f8', ev.crit ? 16 : 11);
       if (ev.crit) kick(7);
       break;
     case 'kill':
@@ -140,7 +233,7 @@ function handleEvent(ev) {
       break;
     case 'levelup':
       Sound.play('levelup');
-      addFloater(ev.x, ev.y, `Lv.${ev.level}`, '#8fd4ff', 14);
+      addFloater(world.player.x, world.player.y, `Lv.${ev.level}`, '#8fd4ff', 14);
       break;
     case 'pickup':
       Sound.playPickup(ev.kind);
@@ -157,9 +250,16 @@ function handleEvent(ev) {
       addFloater(ev.x, ev.y, '裂墙！', '#c9a7ff', 12);
       kick(5);
       break;
+    case 'impact':
+      Sound.play('hit');
+      break;
     case 'summon':
       Sound.play('summon');
       kick(6);
+      break;
+    case 'bossDown':
+      Sound.play('bossDown');
+      kick(8);
       break;
     case 'revive':
       Sound.play('revive');
@@ -183,13 +283,13 @@ function handleEvent(ev) {
 function addFloater(wx, wy, text, color, size) {
   if (typeof wx !== 'number' || typeof wy !== 'number') return;
   floaters.push({
-    wx: wx + (Math.random() - 0.5) * 0.24,
+    wx: wx + (Math.random() - 0.5) * 6,
     wy,
     text,
     color,
     size: size || 11,
-    life: 0.95,
-    max: 0.95,
+    life: 0.9,
+    max: 0.9,
   });
   if (floaters.length > 40) floaters.shift();
 }
@@ -208,8 +308,6 @@ function updateFx(dt) {
 }
 
 /* ---------------- 绘制 ---------------- */
-
-const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
 function sprite(name, sx, sy, alpha = 1) {
   const frame = atlas && atlas.frames[name];
@@ -236,120 +334,154 @@ const ITEM_SPRITE = {
 };
 
 function draw() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.fillStyle = '#08080c';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  if (!state || !state.tiles || state.screen === 'title') return;
-  if (!atlasImg) return;
+  if (!world || world.screen === 'title' || !world.tiles || !atlasImg) return;
 
-  const p = state.player;
-  const mapW = state.mapW;
-  const mapH = state.mapH;
-  const camX = Math.round(clamp(p.x - VIEW_W / 2 + 0.5, 0, Math.max(0, mapW - VIEW_W)));
-  const camY = Math.round(clamp(p.y - VIEW_H / 2 + 0.5, 0, Math.max(0, mapH - VIEW_H)));
+  const w = world;
+  const p = w.player;
 
   ctx.save();
   if (shake > 0.4) {
     ctx.translate((Math.random() - 0.5) * shake * 1.6, (Math.random() - 0.5) * shake * 1.6);
   }
 
-  // 地形
-  for (let vy = 0; vy < VIEW_H; vy++) {
-    for (let vx = 0; vx < VIEW_W; vx++) {
-      const mx = camX + vx;
-      const my = camY + vy;
-      if (mx < 0 || my < 0 || mx >= mapW || my >= mapH) continue;
-      const i = my * mapW + mx;
-      const explored = state.explored[i] === '1';
-      if (!explored) continue;
+  const baseX = Math.floor(cam.x / TILE);
+  const baseY = Math.floor(cam.y / TILE);
+  const offX = -(cam.x - baseX * TILE);
+  const offY = -(cam.y - baseY * TILE);
 
-      const visible = state.visible[i] === '1';
-      const t = state.tiles[i];
-      const sx = vx * TILE;
-      const sy = vy * TILE;
+  for (let vy = 0; vy <= VIEW_H; vy++) {
+    for (let vx = 0; vx <= VIEW_W; vx++) {
+      const tx = baseX + vx;
+      const ty = baseY + vy;
+      if (tx < 0 || ty < 0 || tx >= w.mapW || ty >= w.mapH) continue;
+      const i = ty * w.mapW + tx;
+      if (!w.explored[i]) continue;
+
+      const vis = w.visible[i] === 1;
+      const t = w.tiles[i];
+      const sx = vx * TILE + offX;
+      const sy = vy * TILE + offY;
 
       if (t === '#') sprite('wall', sx, sy);
       else if (t === 'S') {
         sprite('wall', sx, sy);
-        if (visible) sprite('crack', sx, sy);
+        if (vis) sprite('crack', sx, sy);
       } else if (t === '>') sprite('stairs', sx, sy);
-      else sprite('floor_' + (['a', 'b', 'c'][(mx * 7 + my * 13) % 3]), sx, sy);
+      else sprite('floor_' + (['a', 'b', 'c'][(tx * 7 + ty * 13) % 3]), sx, sy);
 
-      if (!visible) {
-        ctx.fillStyle = 'rgba(4,4,8,0.75)';
+      if (!vis) {
+        ctx.fillStyle = 'rgba(4,4,8,0.74)';
         ctx.fillRect(sx, sy, TILE, TILE);
-      } else {
-        const dist = Math.max(Math.abs(mx - p.x), Math.abs(my - p.y));
-        const a = Math.min(0.2, Math.max(0, (dist - 5) * 0.028));
-        if (a > 0) {
-          ctx.fillStyle = `rgba(4,4,10,${a.toFixed(3)})`;
-          ctx.fillRect(sx, sy, TILE, TILE);
-        }
       }
     }
   }
 
-  const itemVisible = (x, y) => {
-    if (x < 0 || y < 0 || x >= mapW || y >= mapH) return false;
-    return state.visible[y * mapW + x] === '1';
+  const visibleAt = (x, y) => {
+    const tx = Math.floor(x / TILE);
+    const ty = Math.floor(y / TILE);
+    if (tx < 0 || ty < 0 || tx >= w.mapW || ty >= w.mapH) return false;
+    return w.visible[ty * w.mapW + tx] === 1;
   };
 
-  // 玩家周围的暖光
-  const glowX = (p.x - camX) * TILE + TILE / 2;
-  const glowY = (p.y - camY) * TILE + TILE / 2;
-  const glow = ctx.createRadialGradient(glowX, glowY, 6, glowX, glowY, 96);
+  const glowX = p.x - cam.x;
+  const glowY = p.y - cam.y;
+  const glow = ctx.createRadialGradient(glowX, glowY, 8, glowX, glowY, 110);
   glow.addColorStop(0, 'rgba(255,208,140,0.09)');
   glow.addColorStop(1, 'rgba(255,208,140,0)');
   ctx.fillStyle = glow;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // 物品
-  for (const it of state.items || []) {
-    if (!itemVisible(it.x, it.y)) continue;
-    sprite(ITEM_SPRITE[it.kind] || 'chest', (it.x - camX) * TILE, (it.y - camY) * TILE);
+  for (const it of w.items) {
+    if (!visibleAt(it.x, it.y)) continue;
+    sprite(ITEM_SPRITE[it.kind] || 'chest', it.x - cam.x - TILE / 2, it.y - cam.y - TILE / 2);
   }
 
-  // 敌人
-  for (const e of state.enemies || []) {
-    if (!itemVisible(e.x, e.y)) continue;
-    const ex = (e.x - camX) * TILE;
-    const ey = (e.y - camY) * TILE;
-    sprite(ENEMY_SPRITE[e.type] || 'slime', ex, ey, e.flash ? 0.55 : 1);
+  for (const e of w.enemies) {
+    if (e.dead || !visibleAt(e.x, e.y)) continue;
+    const ex = e.x - cam.x - TILE / 2;
+    const ey = e.y - cam.y - TILE / 2;
+    sprite(ENEMY_SPRITE[e.type] || 'slime', ex, ey, e.flash > 0 ? 0.5 : 1);
     if (e.boss) {
       const ratio = Math.max(0, e.hp / e.maxHp);
       ctx.fillStyle = 'rgba(0,0,0,0.75)';
-      ctx.fillRect(ex + 1, ey - 4, TILE - 2, 3);
+      ctx.fillRect(ex + 1, ey - 5, TILE - 2, 3);
       ctx.fillStyle = '#e0455f';
-      ctx.fillRect(ex + 1, ey - 4, (TILE - 2) * ratio, 3);
+      ctx.fillRect(ex + 1, ey - 5, (TILE - 2) * ratio, 3);
     }
   }
 
-  // 玩家
-  sprite('player', (p.x - camX) * TILE, (p.y - camY) * TILE);
+  for (const pr of w.projectiles) {
+    const sx = pr.x - cam.x;
+    const sy = pr.y - cam.y;
+    if (pr.from === 'player') {
+      const n = Math.hypot(pr.vx, pr.vy) || 1;
+      ctx.strokeStyle = '#ffe9b0';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(sx, sy);
+      ctx.lineTo(sx - (pr.vx / n) * 7, sy - (pr.vy / n) * 7);
+      ctx.stroke();
+    } else {
+      ctx.fillStyle = '#b06bff';
+      ctx.beginPath();
+      ctx.arc(sx, sy, pr.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
 
-  // 无敌护盾提示
-  if (p.invuln > 0) {
-    ctx.strokeStyle = 'rgba(120,190,255,0.8)';
+  for (const s of w.slashes) {
+    const alpha = Math.max(0, s.life / s.max) * 0.5;
+    const sx = s.x - cam.x;
+    const sy = s.y - cam.y;
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.arc(sx, sy, s.reach, s.aim - s.arc / 2, s.aim + s.arc / 2);
+    ctx.closePath();
+    ctx.fillStyle = `rgba(255,244,214,${alpha.toFixed(3)})`;
+    ctx.fill();
+    ctx.strokeStyle = `rgba(255,255,255,${(alpha * 0.9).toFixed(3)})`;
     ctx.lineWidth = 1;
-    const px = (p.x - camX) * TILE + 1;
-    const py = (p.y - camY) * TILE + 1;
-    ctx.strokeRect(px, py, TILE - 2, TILE - 2);
+    ctx.stroke();
+  }
+
+  const psx = p.x - cam.x - TILE / 2;
+  const psy = p.y - cam.y - TILE / 2;
+  if (p.invuln > 0 && Math.floor(w.t * 20) % 2 === 0) ctx.globalAlpha = 0.5;
+  sprite('player', psx, psy);
+  ctx.globalAlpha = 1;
+
+  ctx.strokeStyle = 'rgba(255,220,160,0.8)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(p.x - cam.x + Math.cos(p.aim) * 6, p.y - cam.y + Math.sin(p.aim) * 6);
+  ctx.lineTo(p.x - cam.x + Math.cos(p.aim) * 13, p.y - cam.y + Math.sin(p.aim) * 13);
+  ctx.stroke();
+
+  if (p.invuln > 0) {
+    ctx.strokeStyle = 'rgba(120,190,255,0.7)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(psx + 1, psy + 1, TILE - 2, TILE - 2);
   }
 
   ctx.restore();
 
-  drawFloaters(camX, camY);
+  drawFloaters();
   drawHurtFlash();
+  drawCrosshair();
 }
 
-function drawFloaters(camX, camY) {
+function drawFloaters() {
   if (!floaters.length) return;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   for (const f of floaters) {
-    const sx = (f.wx - camX) * TILE + TILE / 2;
+    const sx = f.wx - cam.x;
     const t = 1 - f.life / f.max;
-    const sy = (f.wy - camY) * TILE + TILE / 2 - 4 - t * 18;
+    const sy = f.wy - cam.y - 6 - t * 18;
     const alpha = f.life > f.max * 0.65 ? 1 : f.life / (f.max * 0.65);
     ctx.globalAlpha = Math.max(0, alpha);
     ctx.font = `bold ${f.size}px ui-monospace, Consolas, monospace`;
@@ -366,47 +498,63 @@ function drawFloaters(camX, camY) {
 
 function drawHurtFlash() {
   if (hurtFlash <= 0) return;
-  ctx.fillStyle = `rgba(196,32,52,${(0.2 * hurtFlash).toFixed(3)})`;
+  ctx.fillStyle = `rgba(196,32,52,${(0.15 * hurtFlash).toFixed(3)})`;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+
+function drawCrosshair() {
+  if (!world || world.screen !== 'playing') return;
+  ctx.strokeStyle = 'rgba(255,240,200,0.6)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(mouse.sx - 5, mouse.sy);
+  ctx.lineTo(mouse.sx + 5, mouse.sy);
+  ctx.moveTo(mouse.sx, mouse.sy - 5);
+  ctx.lineTo(mouse.sx, mouse.sy + 5);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(mouse.sx, mouse.sy, 9, 0, Math.PI * 2);
+  ctx.strokeStyle = 'rgba(255,240,200,0.25)';
+  ctx.stroke();
 }
 
 /* ---------------- HUD ---------------- */
 
 function updateHud() {
-  if (!state) return;
+  if (!world) return;
 
-  if (state.screen === 'title' || !state.player) {
+  if (world.screen === 'title' || !world.player) {
     hudFloor.textContent = '准备出发';
     hpFill.style.width = '100%';
     hpText.textContent = '—';
     weaponLabel.textContent = '铁剑';
     potionLabel.textContent = '药水 ×1';
     goldLabel.textContent = '金币 0';
-    crystalLabel.textContent = '晶石 ' + (state.meta ? state.meta.crystals : 0);
+    crystalLabel.textContent = '晶石 ' + (world.meta ? world.meta.crystals : 0);
     logEl.innerHTML = '';
     statsEl.textContent = '';
     return;
   }
 
-  const p = state.player;
-  hudFloor.textContent = `第 ${state.depth} 层 / ${state.maxFloor}`;
+  const p = world.player;
+  hudFloor.textContent = `第 ${world.depth} 层 / ${Engine.MAX_FLOOR}`;
   const ratio = clamp(p.hp / p.maxHp, 0, 1);
   hpFill.style.width = (ratio * 100).toFixed(1) + '%';
-  hpText.textContent = `${p.hp} / ${p.maxHp}`;
+  hpText.textContent = `${Math.max(0, Math.round(p.hp))} / ${p.maxHp}`;
   weaponLabel.textContent = p.weapon.name;
   potionLabel.textContent = `药水 ×${p.potion}`;
   goldLabel.textContent = `金币 ${p.gold}`;
-  crystalLabel.textContent = `晶石 ${state.meta.crystals}`;
+  crystalLabel.textContent = `晶石 ${world.meta.crystals}`;
 
-  const lines = (state.log || []).slice(-5);
+  const lines = (world.log || []).slice(-5);
   logEl.innerHTML = lines.map((l) => `<div>${escapeHtml(l)}</div>`).join('');
 
   const crit = Math.round(p.crit * 100);
   const ls = Math.round(p.ls * 100);
-  const extra = p.revive > 0 ? '  ·  护符 ×1' : '';
+  const extra = p.revive > 0 ? '  护符 ×1' : '';
   statsEl.textContent =
-    `攻 ${p.atk}  防 ${p.def}  暴 ${crit}%  吸血 ${ls}%  攻速 ${p.speed}%` +
-    `\nLv ${p.level}  XP ${p.xp}/${p.xpNext}${extra}`;
+    `攻 ${p.atk}  防 ${p.def}  暴 ${crit}%  吸血 ${ls}%${extra}` +
+    `\nLv ${p.level}  XP ${p.xp}/${p.xpNext}  敌人 ${world.enemies.filter((e) => !e.dead).length}`;
 }
 
 function escapeHtml(s) {
@@ -416,31 +564,31 @@ function escapeHtml(s) {
 /* ---------------- 覆盖层 ---------------- */
 
 function updateOverlay() {
-  if (!state) return;
+  if (!world) return;
 
-  let key = state.screen;
-  if (state.meta) key += `:${state.meta.crystals}:${state.meta.upgrades.hp}:${state.meta.upgrades.atk}`;
-  if (state.pending) key = 'choice:' + state.pending.map((c) => c.id).join(',');
+  let key = world.screen;
+  if (world.meta) key += `:${world.meta.crystals}:${world.meta.upgrades.hp}:${world.meta.upgrades.atk}`;
+  if (world.pending) key = 'choice:' + world.pending.map((c) => c.id).join(',');
 
   if (key === lastOverlayKey) return;
   lastOverlayKey = key;
 
-  if (state.pending) {
+  if (world.pending) {
     overlayInner.innerHTML = choiceHtml();
     overlay.classList.remove('hidden');
     return;
   }
-  if (state.screen === 'title') {
+  if (world.screen === 'title') {
     overlayInner.innerHTML = titleHtml();
     overlay.classList.remove('hidden');
     return;
   }
-  if (state.screen === 'dead') {
+  if (world.screen === 'dead') {
     overlayInner.innerHTML = deadHtml();
     overlay.classList.remove('hidden');
     return;
   }
-  if (state.screen === 'won') {
+  if (world.screen === 'won') {
     overlayInner.innerHTML = winHtml();
     overlay.classList.remove('hidden');
     return;
@@ -449,14 +597,15 @@ function updateOverlay() {
 }
 
 function upgradeCard(stat, title, effect) {
-  const lv = (state.meta.upgrades && state.meta.upgrades[stat]) || 0;
-  const maxed = lv >= state.metaMax;
-  const cost = state.metaCost[lv];
-  const afford = state.meta.crystals >= cost;
+  const meta = world.meta;
+  const lv = (meta.upgrades && meta.upgrades[stat]) || 0;
+  const maxed = lv >= Engine.META_MAX;
+  const cost = Engine.META_COST[lv];
+  const afford = meta.crystals >= cost;
   return `
     <button class="card" data-act="upgrade" data-stat="${stat}" ${maxed || !afford ? 'disabled' : ''}>
       <span class="card-name">${title}</span>
-      <span class="card-lv">Lv ${lv} / ${state.metaMax}</span>
+      <span class="card-lv">Lv ${lv} / ${Engine.META_MAX}</span>
       <span class="card-desc">${effect}</span>
       <span class="card-cost">${maxed ? '已满级' : cost + ' 晶石'}</span>
     </button>`;
@@ -471,16 +620,16 @@ function upgradePanel() {
 }
 
 function titleHtml() {
-  const meta = state.meta;
+  const meta = world.meta;
   return `
     <div class="panel">
       <h1>地牢像素 RPG</h1>
-      <p class="sub">零依赖 · 离线 · 随机地牢 · 局内肉鸽</p>
+      <p class="sub">零依赖 · 离线 · 实时动作 · 随机地牢</p>
       <div class="crystal-big">晶石 <b>${meta.crystals}</b></div>
       ${upgradePanel()}
       <button class="start" data-act="start">开始冒险</button>
       <p class="hint">
-        WASD 移动 · 方向键攻击 · Q 喝药 · 空格原地等待<br>
+        WASD 移动 · 鼠标瞄准 · 按住左键攻击 · Q 喝药 · M 静音<br>
         已冒险 ${meta.runs} 次 · 通关 ${meta.wins} 次 · 最深第 ${meta.best.floor} 层
       </p>
     </div>`;
@@ -489,7 +638,7 @@ function titleHtml() {
 function choiceHtml() {
   return `
     <div class="choices">
-      ${state.pending
+      ${world.pending
         .map(
           (c, i) => `
         <button class="choice" data-act="choose" data-index="${i}">
@@ -503,7 +652,7 @@ function choiceHtml() {
 }
 
 function deadHtml() {
-  const d = state.deathInfo || { floor: 1, kills: 0, crystals: 0 };
+  const d = world.deathInfo || { floor: 1, kills: 0, crystals: 0 };
   return `
     <div class="panel">
       <h2>你倒下了</h2>
@@ -511,15 +660,15 @@ function deadHtml() {
         抵达第 <b>${d.floor}</b> 层 · 击杀 <b>${d.kills}</b><br>
         本局获得晶石 <span class="big-num">${d.crystals}</span>
       </p>
-      <div class="crystal-big">持有晶石 <b>${state.meta.crystals}</b></div>
+      <div class="crystal-big">持有晶石 <b>${world.meta.crystals}</b></div>
       ${upgradePanel()}
       <button class="start restart" data-act="start">再来一局（Enter）</button>
-      <p class="hint">历史最深第 ${state.meta.best.floor} 层 · 最多击杀 ${state.meta.best.kills}</p>
+      <p class="hint">历史最深第 ${world.meta.best.floor} 层 · 最多击杀 ${world.meta.best.kills}</p>
     </div>`;
 }
 
 function winHtml() {
-  const w = state.winInfo || { crystals: 0 };
+  const w = world.winInfo || { crystals: 0 };
   return `
     <div class="panel">
       <h2 style="color:#ffd45e">通关！</h2>
@@ -527,7 +676,7 @@ function winHtml() {
         你击败了地牢之主。<br>
         本局获得晶石 <span class="big-num">${w.crystals}</span>
       </p>
-      <div class="crystal-big">持有晶石 <b>${state.meta.crystals}</b></div>
+      <div class="crystal-big">持有晶石 <b>${world.meta.crystals}</b></div>
       ${upgradePanel()}
       <button class="start restart" data-act="start">再来一局（Enter）</button>
     </div>`;
@@ -538,62 +687,45 @@ overlay.addEventListener('click', (ev) => {
   const btn = ev.target.closest('[data-act]');
   if (!btn) return;
   const act = btn.dataset.act;
-  if (act === 'start') post('/api/start');
-  else if (act === 'upgrade') post('/api/upgrade', { stat: btn.dataset.stat });
-  else if (act === 'choose') post('/api/choose', { index: Number(btn.dataset.index) });
+  if (act === 'start') startRun();
+  else if (act === 'upgrade') buyUpgrade(btn.dataset.stat);
+  else if (act === 'choose') world.resolveChoice(Number(btn.dataset.index));
 });
 
-/* ---------------- 输入 ---------------- */
+/* ---------------- 流程 ---------------- */
 
-const MOVE_KEYS = {
-  w: [0, -1],
-  a: [-1, 0],
-  s: [0, 1],
-  d: [1, 0],
-};
+function startRun() {
+  lastOverlayKey = '';
+  world.startRun();
+  const p = world.player;
+  cam.x = clamp(p.x - canvas.width / 2, 0, Math.max(0, world.mapW * TILE - canvas.width));
+  cam.y = clamp(p.y - canvas.height / 2, 0, Math.max(0, world.mapH * TILE - canvas.height));
+  floaters.length = 0;
+  shake = 0;
+  hurtFlash = 0;
+}
 
-const ATTACK_KEYS = {
-  ArrowUp: [0, -1],
-  ArrowLeft: [-1, 0],
-  ArrowDown: [0, 1],
-  ArrowRight: [1, 0],
-};
+async function buyUpgrade(stat) {
+  if (!world.upgradeMeta(stat)) return;
+  lastOverlayKey = '';
+  await persistMeta();
+}
 
-document.addEventListener('keydown', (ev) => {
-  if (ev.isComposing) return;
-  if (ev.key.startsWith('Arrow') || ev.key === ' ') ev.preventDefault();
-  Sound.unlock();
-  if (!state) return;
-
-  if (state.pending) {
-    if (ev.key >= '1' && ev.key <= '3') {
-      post('/api/choose', { index: Number(ev.key) - 1 });
-    }
-    return;
+async function persistMeta() {
+  if (!world) return;
+  try {
+    await fetch('/api/meta', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(world.meta),
+    });
+  } catch (err) {
+    /* 存档失败不影响游戏 */
   }
-
-  if (state.screen !== 'playing') {
-    if (ev.key === 'Enter' || ev.key === ' ') post('/api/start');
-    return;
-  }
-
-  if (ev.repeat) return;
-  const k = ev.key.length === 1 ? ev.key.toLowerCase() : ev.key;
-
-  if (MOVE_KEYS[k]) {
-    post('/api/action', { action: { type: 'move', dx: MOVE_KEYS[k][0], dy: MOVE_KEYS[k][1] } });
-  } else if (ATTACK_KEYS[ev.key]) {
-    post('/api/action', { action: { type: 'attack', dx: ATTACK_KEYS[ev.key][0], dy: ATTACK_KEYS[ev.key][1] } });
-  } else if (k === 'q') {
-    post('/api/action', { action: { type: 'potion' } });
-  } else if (k === 'm') {
-    Sound.toggle();
-  } else if (ev.key === ' ') {
-    post('/api/action', { action: { type: 'wait' } });
-  }
-});
+}
 
 boot().catch((err) => {
   console.error(err);
-  document.body.innerHTML = '<pre style="color:#f88;padding:2em">加载失败，请查看控制台。\n' + escapeHtml(err && err.message) + '</pre>';
+  document.body.innerHTML =
+    '<pre style="color:#f88;padding:2em">加载失败，请查看控制台。\n' + escapeHtml(err && err.message) + '</pre>';
 });

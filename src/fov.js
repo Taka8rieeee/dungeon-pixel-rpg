@@ -1,5 +1,11 @@
 'use strict';
 
+/* UMD：Node 走 module.exports，浏览器挂到全局 FOV */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.FOV = factory();
+})(typeof self !== 'undefined' ? self : this, function () {
+
 /**
  * 递归阴影投射视野（8 象限），返回 Uint8Array 可见标记。
  * 只依赖 isOpaque 回调，不依赖具体地图结构。
@@ -61,4 +67,5 @@ function computeFov(ox, oy, radius, isOpaque, w, h) {
   return visible;
 }
 
-module.exports = { computeFov };
+return { computeFov };
+});

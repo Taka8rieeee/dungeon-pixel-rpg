@@ -1,5 +1,11 @@
 'use strict';
 
+/* UMD：Node 走 module.exports，浏览器挂到全局 RNG（实时引擎在浏览器里复用） */
+(function (root, factory) {
+  if (typeof module === 'object' && module.exports) module.exports = factory();
+  else root.RNG = factory().RNG;
+})(typeof self !== 'undefined' ? self : this, function () {
+
 /** mulberry32：小巧、可复现的伪随机数发生器 */
 function mulberry32(seed) {
   let a = seed >>> 0;
@@ -44,4 +50,5 @@ class RNG {
   }
 }
 
-module.exports = { RNG };
+return { RNG };
+});
