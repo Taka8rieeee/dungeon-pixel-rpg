@@ -746,6 +746,70 @@ test('可以在已拥有的武器间切换', () => {
   assert.strictEqual(w.switchWeapon(9), false, '越界不应切换');
 });
 
+test('纯武器宝箱才有「都不想要」，混合与纯增益没有', () => {
+  let skipped = 0;
+  for (let seed = 1; seed <= 80; seed++) {
+    const w = newWorld(9200 + seed);
+    w.openChest({ x: w.player.x, y: w.player.y });
+    const allWeapon = w.pending.every((o) => o.kind === 'weapon');
+    assert.strictEqual(w.pendingSkip, allWeapon, `种子 ${seed} 的按钮显示条件不对`);
+    if (allWeapon) skipped++;
+  }
+  assert.ok(skipped > 0, '应出现过纯武器宝箱');
+});
+
+/** 找一个会刷出「三把武器」的宝箱，返回 { w, chest } */
+function findWeaponOnlyChest(from) {
+  for (let seed = from; seed < from + 400; seed++) {
+    const w = newWorld(seed);
+    const chest = { id: seed, x: w.player.x, y: w.player.y, kind: 'chest' };
+    w.items.push(chest);
+    w.openChest(chest);
+    if (w.pendingSkip) return { w, chest };
+  }
+  return null;
+}
+
+test('「都不想要」关掉界面，但箱子留在原地', () => {
+  const found = findWeaponOnlyChest(9500);
+  assert.ok(found, '没找到纯武器宝箱');
+  const { w, chest } = found;
+  assert.strictEqual(w.skipPending(), true);
+  assert.strictEqual(w.pending, null, '界面应关闭');
+  assert.strictEqual(w.pendingKind, '');
+  assert.strictEqual(w.paused, false, '应解除暂停');
+  assert.ok(w.items.includes(chest), '箱子应留在原地');
+});
+
+test('选了东西之后箱子才消失', () => {
+  const w = newWorld(9700);
+  const chest = { id: 9992, x: w.player.x, y: w.player.y, kind: 'chest' };
+  w.items.push(chest);
+  w.openChest(chest);
+  assert.ok(w.items.includes(chest), '还没选时箱子不该消失');
+  w.resolveChoice(0);
+  assert.ok(!w.items.includes(chest), '选完后箱子应被拿走');
+});
+
+test('站在被跳过的箱子上不会反复弹窗，走开再回来才重新开', () => {
+  const found = findWeaponOnlyChest(9900);
+  assert.ok(found, '没找到纯武器宝箱');
+  const { w, chest } = found;
+  assert.strictEqual(w.skipPending(), true);
+
+  // 原地站 2 秒：不能每帧都弹
+  for (let i = 0; i < 120; i++) w.tick(0.016, idle());
+  assert.strictEqual(w.pending, null, '站在箱子上不该反复弹窗');
+
+  // 走开一段再回来，应该能重新打开
+  w.player.x += 40;
+  w.tick(0.016, idle());
+  w.player.x -= 40;
+  w.tick(0.016, idle());
+  assert.ok(w.pending, '走开再回来应能重新打开');
+  assert.strictEqual(w.pendingChest, chest, '重新打开的应是同一个箱子');
+});
+
 console.log('实时引擎测试：');
 let failed = 0;
 for (const [mark, name] of results) {

@@ -152,6 +152,8 @@
       this.pending = null;
       this.pendingKind = '';
       this.pendingLevels = 0;
+      this.pendingChest = null;
+      this.pendingSkip = false;
       this.t = 0;
       this.depth = 1;
       this.fovTimer = 0;
@@ -172,6 +174,8 @@
       this.pending = null;
       this.pendingKind = '';
       this.pendingLevels = 0;
+      this.pendingChest = null;
+      this.pendingSkip = false;
       this.events = [];
       this.log = [];
       this.t = 0;
@@ -920,7 +924,9 @@
 
       this.pending = null;
       const wasStarter = this.pendingKind === 'starter';
+      const wasChest = this.pendingKind === 'chest';
       this.pendingKind = '';
+      if (wasChest) this.consumePendingChest();
 
       if (!wasStarter && this.pendingLevels > 0) {
         this.rollChoices();
@@ -1334,7 +1340,22 @@
           keep.push(it);
           continue;
         }
-        if (dist2(it.x, it.y, p.x, p.y) >= 13 * 13) {
+        const d2 = dist2(it.x, it.y, p.x, p.y);
+        // 宝箱开过但玩家点了「都不想要」：箱子留在原地，
+        // 必须走开一段再回来才会重新弹窗，否则站在箱子上会无限弹。
+        if (it.kind === 'chest') {
+          if (it.armed === false && d2 > 30 * 30) it.armed = true;
+          if (it.armed === false || d2 >= 13 * 13) {
+            keep.push(it);
+            continue;
+          }
+          // 箱子只有在真正选了东西之后才消失（见 consumePendingChest）
+          it.armed = false;
+          keep.push(it);
+          this.openChest(it);
+          continue;
+        }
+        if (d2 >= 13 * 13) {
           keep.push(it);
           continue;
         }
@@ -1371,6 +1392,7 @@
         return true;
       }
       if (item.kind === 'chest') {
+        // 宝箱统一在 updateItems 里处理（要保留在原地，不在这里移除）
         this.openChest(item);
         return true;
       }
@@ -1380,6 +1402,9 @@
     /** 宝箱：暂停游戏，从武器池和增益池里随机刷出最多三个选项 */
     openChest(item) {
       const p = this.player;
+      // 打开后先「上锁」，玩家走开一段距离才会重新可开，
+      // 否则站在箱子上会每帧都弹窗
+      if (item) item.armed = false;
       // 旧木棒是开局垃圾，永远不该出现在宝箱选项里
       const freshWeapons = this.rng.shuffle(
         Object.keys(WEAPONS).filter((id) => id !== 'starter' && !p.weapons.includes(id)),
@@ -1419,9 +1444,34 @@
 
       this.pending = options;
       this.pendingKind = 'chest';
+      this.pendingChest = item;
+      // 全是武器时才给「都不想要」：武器栏满了的时候，一箱武器等于没得选
+      this.pendingSkip = options.length > 0 && options.every((o) => o.kind === 'weapon');
       this.paused = true;
       this.addLog('宝箱打开了，挑一样带走。');
       this.emit({ type: 'pickup', kind: 'chest', weapon: null, x: item.x, y: item.y });
+    }
+
+    /** 选完东西后箱子才真正被拿走 */
+    consumePendingChest() {
+      const chest = this.pendingChest;
+      this.pendingChest = null;
+      this.pendingSkip = false;
+      if (!chest) return;
+      const i = this.items.indexOf(chest);
+      if (i >= 0) this.items.splice(i, 1);
+    }
+
+    /** 「都不想要」：关掉界面，箱子留在原地，走开再回来可以重新开 */
+    skipPending() {
+      if (!this.pending || !this.pendingSkip) return false;
+      this.pending = null;
+      this.pendingKind = '';
+      this.pendingSkip = false;
+      this.pendingChest = null;
+      this.paused = false;
+      this.addLog('把箱子留在原地，回头再来看看。');
+      return true;
     }
 
     usePotion() {

@@ -383,6 +383,29 @@ h2 {
   line-height: 1.5;
 }
 
+.choice-skip {
+  margin-top: 1.1em;
+  padding: 0.55em 1.6em;
+  background: transparent;
+  border: 1px solid #45455e;
+  color: #9a9ab4;
+  font: inherit;
+  font-size: 0.85em;
+  cursor: pointer;
+}
+
+.choice-skip:hover {
+  border-color: #8a8aa8;
+  color: #dcdcec;
+}
+
+.choice-hint {
+  margin-top: 0.55em;
+  font-size: 0.72em;
+  color: #6a6a84;
+  text-align: center;
+}
+
 .results {
   font-size: 0.95em;
   line-height: 1.9;

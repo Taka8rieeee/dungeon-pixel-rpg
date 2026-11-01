@@ -142,6 +142,10 @@ document.addEventListener('keydown', (ev) => {
   if (k.startsWith('arrow') || k === ' ') ev.preventDefault();
 
   if (world && world.pending) {
+    if (k === 'escape') {
+      world.skipPending();
+      return;
+    }
     if (k >= '1' && k <= '9') world.resolveChoice(Number(k) - 1);
     return;
   }
@@ -671,7 +675,7 @@ function updateOverlay() {
 
   // 升级选择优先，且每次都确保遮罩处于可见状态（不能靠 key 缓存决定是否显示）
   if (world.pending) {
-    const ck = 'choice:' + world.pending.map((c) => c.id).join(',');
+    const ck = 'choice:' + world.pendingKind + ':' + (world.pendingSkip ? 'skip:' : '') + world.pending.map((c) => c.id).join(',');
     if (ck !== lastOverlayKey) {
       lastOverlayKey = ck;
       overlayInner.innerHTML = choiceHtml();
@@ -746,7 +750,12 @@ function choiceHtml() {
   const kind = world.pendingKind;
   const title =
     kind === 'starter' ? '选择开局武器' : kind === 'chest' ? '宝箱：带走一样' : '升级！三选一';
-  const sub = kind === 'chest' ? '武器或增益，只能带走一样' : '';
+  const sub =
+    kind === 'chest'
+      ? world.pendingSkip
+        ? '全是武器。都不想要的话就留着，箱子不会消失'
+        : '武器或增益，只能带走一样'
+      : '';
   return `
     <div class="choice-panel">
       <div class="choice-title">${title}</div>
@@ -763,6 +772,12 @@ function choiceHtml() {
           )
           .join('')}
       </div>
+      ${
+        world.pendingSkip
+          ? `<button class="choice-skip" data-act="skip">都不想要（Esc）</button>
+             <div class="choice-hint">关掉界面，箱子留在原地，走开再回来还能开</div>`
+          : ''
+      }
     </div>`;
 }
 
@@ -805,6 +820,7 @@ overlay.addEventListener('click', (ev) => {
   if (act === 'start') startRun();
   else if (act === 'upgrade') buyUpgrade(btn.dataset.stat);
   else if (act === 'choose') world.resolveChoice(Number(btn.dataset.index));
+  else if (act === 'skip') world.skipPending();
 });
 
 /* ---------------- 流程 ---------------- */
