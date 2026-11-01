@@ -23,7 +23,90 @@ body {
   font-family: "Microsoft YaHei", "PingFang SC", "Noto Sans CJK SC", Consolas, monospace;
   overflow: hidden;
   user-select: none;
+  touch-action: none;
 }
+
+/* ---------------- 触屏控件（仅触摸设备显示） ---------------- */
+
+.stick {
+  position: fixed;
+  bottom: 5vh;
+  width: 30vmin;
+  height: 30vmin;
+  max-width: 148px;
+  max-height: 148px;
+  min-width: 104px;
+  min-height: 104px;
+  border-radius: 50%;
+  border: 2px solid rgba(120, 140, 190, 0.5);
+  background: rgba(20, 24, 38, 0.42);
+  display: none;
+  touch-action: none;
+  z-index: 30;
+}
+
+.stick .nub {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 44%;
+  height: 44%;
+  margin: -22% 0 0 -22%;
+  border-radius: 50%;
+  background: rgba(150, 170, 230, 0.55);
+  box-shadow: 0 0 0.5em rgba(0, 0, 0, 0.5);
+}
+
+.stick-move {
+  left: 4vmin;
+}
+
+.stick-aim {
+  right: 4vmin;
+}
+
+.touch-btn {
+  position: fixed;
+  right: 7vmin;
+  width: 13vmin;
+  height: 13vmin;
+  max-width: 68px;
+  max-height: 68px;
+  min-width: 48px;
+  min-height: 48px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 212, 94, 0.55);
+  background: rgba(40, 34, 16, 0.5);
+  color: var(--gold);
+  font: inherit;
+  font-size: 1.05em;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+  z-index: 30;
+  padding: 0;
+}
+
+body.touch .stick,
+body.touch .touch-btn {
+  display: flex;
+}
+
+body.touch .touch-btn:nth-of-type(1) {
+  bottom: 44vmin;
+}
+
+body.touch .touch-btn:nth-of-type(2) {
+  bottom: 30vmin;
+  right: 19vmin;
+}
+
+body.touch .touch-btn:nth-of-type(3) {
+  bottom: 16vmin;
+  right: 26vmin;
+}
+
 
 body {
   display: flex;

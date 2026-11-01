@@ -45,6 +45,17 @@ const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 /* ---------------- 启动 ---------------- */
 
 function fit() {
+  if (document.body.classList.contains('touch')) {
+    // 触屏设备用小数缩放铺满屏幕（整数缩放在手机上会留大片黑边）
+    const s = Math.min(
+      (window.innerWidth - 6) / canvas.width,
+      (window.innerHeight - 6) / canvas.height,
+    );
+    stage.style.width = canvas.width * s + 'px';
+    stage.style.height = canvas.height * s + 'px';
+    stage.style.setProperty('--s', String(s));
+    return;
+  }
   const scale = Math.max(
     1,
     Math.min(
@@ -60,6 +71,7 @@ function fit() {
 async function boot() {
   fit();
   window.addEventListener('resize', fit);
+  setupTouch();
 
   atlas = await fetch('/assets/atlas.json').then((r) => r.json());
   atlasImg = new Image();
@@ -70,9 +82,25 @@ async function boot() {
     if (atlasImg.complete && atlasImg.naturalWidth > 0) resolve();
   });
 
-  const meta = await fetch('/api/meta').then((r) => r.json());
+  const meta = await loadMeta();
   world = new Engine.World(meta);
   requestAnimationFrame(loop);
+}
+
+/** 手机版没有本地服务器接口，存档降级到 localStorage */
+const IS_NATIVE_APP = !!window.Capacitor;
+const META_KEY = 'dungeon-pixel-rpg-meta';
+const FALLBACK_META = { crystals: 0, upgrades: { hp: 0, atk: 0 }, best: { floor: 0, kills: 0 }, runs: 0, wins: 0 };
+
+async function loadMeta() {
+  if (IS_NATIVE_APP) {
+    try {
+      return JSON.parse(localStorage.getItem(META_KEY) || 'null') || { ...FALLBACK_META };
+    } catch (err) {
+      return { ...FALLBACK_META };
+    }
+  }
+  return fetch('/api/meta').then((r) => r.json());
 }
 
 let reportedError = '';
@@ -244,15 +272,136 @@ window.addEventListener('blur', () => {
 function buildInput() {
   mouse.wx = cam.x + mouse.sx;
   mouse.wy = cam.y + mouse.sy;
-  return {
-    up: keys.up,
-    down: keys.down,
-    left: keys.left,
-    right: keys.right,
-    firing: mouse.down,
-    aimX: mouse.wx,
-    aimY: mouse.wy,
+  let up = keys.up;
+  let down = keys.down;
+  let left = keys.left;
+  let right = keys.right;
+  let firing = mouse.down;
+  let aimX = mouse.wx;
+  let aimY = mouse.wy;
+
+  // 触屏：左摇杆给 8 方向布尔，右摇杆接管瞄准与开火
+  const mv = touchInput.move;
+  if (Math.hypot(mv.dx, mv.dy) > 0.26) {
+    if (mv.dy < -0.42) up = true;
+    if (mv.dy > 0.42) down = true;
+    if (mv.dx < -0.42) left = true;
+    if (mv.dx > 0.42) right = true;
+  }
+  if (touchInput.aimActive) {
+    aimX = touchInput.aimX;
+    aimY = touchInput.aimY;
+    firing = Math.hypot(touchInput.aim.dx, touchInput.aim.dy) > 0.34;
+  }
+
+  return { up, down, left, right, firing, aimX, aimY };
+}
+
+/* ---------------- 触屏：双摇杆 + 功能按钮 ---------------- */
+
+const touchInput = {
+  move: { id: null, dx: 0, dy: 0 },
+  aim: { id: null, dx: 0, dy: 0 },
+  aimActive: false, // 一旦摸过瞄准摇杆就接管瞄准，不再用鼠标位置
+  aimX: 0,
+  aimY: 0,
+};
+
+function setupTouch() {
+  const coarse = window.matchMedia && matchMedia('(pointer: coarse)').matches;
+  if (!coarse && !('ontouchstart' in window)) return;
+  document.body.classList.add('touch');
+
+  const makeStick = (cls) => {
+    const base = document.createElement('div');
+    base.className = 'stick ' + cls;
+    const nub = document.createElement('div');
+    nub.className = 'nub';
+    base.appendChild(nub);
+    stage.appendChild(base);
+    return { base, nub };
   };
+  const moveStick = makeStick('stick-move');
+  const aimStick = makeStick('stick-aim');
+
+  const R = 44; // 摇杆最大行程（CSS 像素）
+
+  const bindStick = (stick, state, isAim) => {
+    let cx = 0;
+    let cy = 0;
+    const apply = (t) => {
+      let dx = t.clientX - cx;
+      let dy = t.clientY - cy;
+      const d = Math.hypot(dx, dy) || 1;
+      const k = Math.min(1, d / R);
+      dx = (dx / d) * k;
+      dy = (dy / d) * k;
+      state.dx = dx;
+      state.dy = dy;
+      stick.nub.style.transform = `translate(${(dx * R).toFixed(1)}px, ${(dy * R).toFixed(1)}px)`;
+      if (isAim && k > 0.3) {
+        touchInput.aimActive = true;
+        touchInput.aimX = world.player.x + dx * 150;
+        touchInput.aimY = world.player.y + dy * 150;
+      }
+    };
+    stick.base.addEventListener(
+      'touchstart',
+      (ev) => {
+        ev.preventDefault();
+        Sound.unlock();
+        const t = ev.changedTouches[0];
+        state.id = t.identifier;
+        const r = stick.base.getBoundingClientRect();
+        cx = r.left + r.width / 2;
+        cy = r.top + r.height / 2;
+        apply(t);
+      },
+      { passive: false },
+    );
+    stick.base.addEventListener(
+      'touchmove',
+      (ev) => {
+        ev.preventDefault();
+        for (const t of ev.changedTouches) if (t.identifier === state.id) apply(t);
+      },
+      { passive: false },
+    );
+    const end = (ev) => {
+      for (const t of ev.changedTouches) {
+        if (t.identifier !== state.id) continue;
+        state.id = null;
+        state.dx = 0;
+        state.dy = 0;
+        stick.nub.style.transform = 'translate(0, 0)';
+      }
+    };
+    stick.base.addEventListener('touchend', end);
+    stick.base.addEventListener('touchcancel', end);
+  };
+
+  bindStick(moveStick, touchInput.move, false);
+  bindStick(aimStick, touchInput.aim, true);
+
+  const mkBtn = (label, fn) => {
+    const b = document.createElement('button');
+    b.className = 'touch-btn';
+    b.textContent = label;
+    b.addEventListener(
+      'touchstart',
+      (ev) => {
+        ev.preventDefault();
+        Sound.unlock();
+        if (world && world.screen === 'playing' && !world.paused) fn();
+      },
+      { passive: false },
+    );
+    stage.appendChild(b);
+    return b;
+  };
+  mkBtn('药', () => world.usePotion());
+  mkBtn('换', () => world.cycleWeapon(1));
+  mkBtn('捡', () => world.pickupWeaponNearby());
 }
 
 /* ---------------- 相机 ---------------- */
@@ -1054,6 +1203,14 @@ async function buyUpgrade(stat) {
 
 async function persistMeta() {
   if (!world) return;
+  if (IS_NATIVE_APP) {
+    try {
+      localStorage.setItem(META_KEY, JSON.stringify(world.meta));
+    } catch (err) {
+      /* 存满就算了 */
+    }
+    return;
+  }
   try {
     await fetch('/api/meta', {
       method: 'POST',

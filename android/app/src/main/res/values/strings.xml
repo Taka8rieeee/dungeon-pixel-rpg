@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">地牢像素RPG</string>
+    <string name="title_activity_main">地牢像素RPG</string>
+    <string name="package_name">com.taka.dungeonrpg</string>
+    <string name="custom_url_scheme">com.taka.dungeonrpg</string>
+</resources>
