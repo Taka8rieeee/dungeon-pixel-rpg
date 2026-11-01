@@ -151,6 +151,9 @@ const Sound = (() => {
       tone({ from: 660, dur: 0.1, gain: 0.13, wave: 'triangle' });
       tone({ from: 990, dur: 0.18, gain: 0.12, wave: 'triangle', delay: 0.07 });
     },
+    swap() {
+      tone({ from: 520, to: 780, dur: 0.09, gain: 0.12, wave: 'triangle' });
+    },
     bossDown() {
       noise({ from: 1600, to: 120, dur: 0.5, gain: 0.3, filter: 'lowpass', decay: 2.2 });
       [392, 523, 659].forEach((f, i) => tone({ from: f, dur: 0.45, gain: 0.12, wave: 'triangle', delay: 0.1 + i * 0.08 }));

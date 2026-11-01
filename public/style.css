@@ -311,6 +311,29 @@ h2 {
   line-height: 1.7;
 }
 
+.choice-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  max-width: 52em;
+}
+
+.choice-title {
+  text-align: center;
+  font-size: 1.15em;
+  color: var(--gold);
+  margin-bottom: 0.35em;
+  letter-spacing: 0.04em;
+}
+
+.choice-sub {
+  text-align: center;
+  font-size: 0.78em;
+  color: var(--dim);
+  margin-bottom: 0.9em;
+}
+
 .choices {
   display: flex;
   gap: 0.8em;

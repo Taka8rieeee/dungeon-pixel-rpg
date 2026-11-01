@@ -142,7 +142,7 @@ document.addEventListener('keydown', (ev) => {
   if (k.startsWith('arrow') || k === ' ') ev.preventDefault();
 
   if (world && world.pending) {
-    if (k >= '1' && k <= '3') world.resolveChoice(Number(k) - 1);
+    if (k >= '1' && k <= '9') world.resolveChoice(Number(k) - 1);
     return;
   }
 
@@ -155,9 +155,23 @@ document.addEventListener('keydown', (ev) => {
     keys[KEY_MAP[k]] = true;
     return;
   }
+  if (k >= '1' && k <= '9') {
+    world.switchWeapon(Number(k) - 1);
+    return;
+  }
   if (k === 'q') world.usePotion();
   else if (k === 'm') Sound.toggle();
 });
+
+canvas.addEventListener(
+  'wheel',
+  (ev) => {
+    if (!world || world.screen !== 'playing' || world.pending) return;
+    ev.preventDefault();
+    world.cycleWeapon(ev.deltaY > 0 ? 1 : -1);
+  },
+  { passive: false },
+);
 
 document.addEventListener('keyup', (ev) => {
   const k = ev.key.toLowerCase();
@@ -291,6 +305,14 @@ function handleEvent(ev) {
       break;
     case 'upgrade':
       Sound.play('upgrade');
+      break;
+    case 'swap':
+      Sound.play('swap');
+      break;
+    case 'combo':
+      Sound.play('crit');
+      addFloater(ev.x, ev.y, '爆发', '#ffd45e', 15);
+      kick(6);
       break;
     case 'win':
       Sound.play('win');
@@ -562,7 +584,7 @@ function updateHud() {
   const ratio = clamp(p.hp / p.maxHp, 0, 1);
   hpFill.style.width = (ratio * 100).toFixed(1) + '%';
   hpText.textContent = `${Math.max(0, Math.round(p.hp))} / ${p.maxHp}`;
-  weaponLabel.textContent = p.weapon.name;
+  weaponLabel.textContent = `${p.weapon.name} ${p.weaponIndex + 1}/${p.weapons.length}`;
   potionLabel.textContent = `药水 ×${p.potion}`;
   goldLabel.textContent = `金币 ${p.gold}`;
   crystalLabel.textContent = `晶石 ${world.meta.crystals}`;
@@ -573,9 +595,11 @@ function updateHud() {
   const crit = Math.round(p.crit * 100);
   const ls = Math.round(p.ls * 100);
   const extra = p.revive > 0 ? '  护符 ×1' : '';
+  const wlist = p.weapons.map((id) => Engine.WEAPONS[id].name).join(' · ');
   statsEl.textContent =
     `攻 ${p.atk}  防 ${p.def}  暴 ${crit}%  吸血 ${ls}%${extra}` +
-    `\nLv ${p.level}  XP ${p.xp}/${p.xpNext}  敌人 ${world.enemies.filter((e) => !e.dead).length}`;
+    `\nLv ${p.level}  XP ${p.xp}/${p.xpNext}  敌人 ${world.enemies.filter((e) => !e.dead).length}` +
+    `\n${wlist}`;
 }
 
 function escapeHtml(s) {
@@ -661,18 +685,31 @@ function titleHtml() {
 }
 
 function choiceHtml() {
+  const kind = world.pendingKind;
+  const title =
+    kind === 'starter' ? '选择开局武器' : kind === 'chest' ? '宝箱：带走一样' : '升级！三选一';
+  const sub =
+    kind === 'starter'
+      ? '每把武器手感不同，选一把顺手的'
+      : kind === 'chest'
+        ? '新武器会永久留在身上，随时切换'
+        : '';
   return `
-    <div class="choices">
-      ${world.pending
-        .map(
-          (c, i) => `
-        <button class="choice" data-act="choose" data-index="${i}">
-          <span class="key">${i + 1}</span>
-          <span class="name">${escapeHtml(c.name)}</span>
-          <span class="desc">${escapeHtml(c.desc)}</span>
-        </button>`,
-        )
-        .join('')}
+    <div class="choice-panel">
+      <div class="choice-title">${title}</div>
+      ${sub ? `<div class="choice-sub">${sub}</div>` : ''}
+      <div class="choices">
+        ${world.pending
+          .map(
+            (c, i) => `
+          <button class="choice" data-act="choose" data-index="${i}">
+            <span class="key">${i + 1}</span>
+            <span class="name">${escapeHtml(c.name)}</span>
+            <span class="desc">${escapeHtml(c.desc)}</span>
+          </button>`,
+          )
+          .join('')}
+      </div>
     </div>`;
 }
 

@@ -14,11 +14,86 @@
   const MAX_FLOOR = 5;
   const POTION_CAP = 3;
 
+  /**
+   * 五把武器各有独立的战斗机制（trait），不是单纯改数值：
+   *   combo    连击积攒，攒满后下一击爆发
+   *   lunge    出手时向前突进
+   *   pierce   箭矢能穿透
+   *   knockback 击退并减速
+   *   frenzy   连续命中越打越快
+   */
   const WEAPONS = {
-    sword: { id: 'sword', name: '铁剑', kind: 'melee', mult: 1.0, cd: 0.3, reach: 24, arc: 1.7, desc: '近战挥砍，稳定' },
-    spear: { id: 'spear', name: '长矛', kind: 'melee', mult: 0.9, cd: 0.38, reach: 40, arc: 0.75, desc: '长柄突刺，够远' },
-    bow: { id: 'bow', name: '短弓', kind: 'ranged', mult: 0.85, cd: 0.36, reach: 0, arc: 0, speed: 360, life: 0.85, desc: '远程箭矢，可风筝' },
+    sword: {
+      id: 'sword',
+      name: '铁剑',
+      kind: 'melee',
+      mult: 1.0,
+      cd: 0.3,
+      reach: 24,
+      arc: 1.7,
+      trait: 'combo',
+      desc: '均衡挥砍，连中三次后下一击爆发',
+    },
+    spear: {
+      id: 'spear',
+      name: '长矛',
+      kind: 'melee',
+      mult: 0.95,
+      cd: 0.42,
+      reach: 46,
+      arc: 0.5,
+      trait: 'lunge',
+      lunge: 16,
+      desc: '突刺时向前冲一小段，够得着远处',
+    },
+    bow: {
+      id: 'bow',
+      name: '短弓',
+      kind: 'ranged',
+      mult: 0.85,
+      cd: 0.36,
+      speed: 360,
+      life: 0.85,
+      pierce: 1,
+      desc: '远程箭矢，能穿过一个敌人',
+    },
+    hammer: {
+      id: 'hammer',
+      name: '战锤',
+      kind: 'melee',
+      mult: 1.7,
+      cd: 0.75,
+      reach: 30,
+      arc: 1.4,
+      trait: 'knockback',
+      knock: 22,
+      slow: 1.4,
+      desc: '慢速重击，击退并减速命中的敌人',
+    },
+    dagger: {
+      id: 'dagger',
+      name: '匕首',
+      kind: 'melee',
+      mult: 0.55,
+      cd: 0.16,
+      reach: 18,
+      arc: 1.2,
+      trait: 'frenzy',
+      desc: '极快，连续命中会越打越快',
+    },
   };
+
+  /** 开场只能三选一，战锤与匕首靠宝箱获得 */
+  const STARTER_WEAPONS = ['sword', 'spear', 'bow'];
+
+  /** 宝箱里除了新武器，还能换到的增益 */
+  const BUFFS = [
+    { id: 'atk', name: '磨刀石', desc: '攻击力 +2', apply: (p) => { p.atk += 2; } },
+    { id: 'vit', name: '护心镜', desc: '生命上限 +12，并立刻回复 12', apply: (p) => { p.maxHp += 12; p.hp += 12; } },
+    { id: 'crit', name: '锋锐符文', desc: '暴击率 +8%', apply: (p) => { p.crit += 0.08; } },
+    { id: 'swift', name: '轻身靴', desc: '移动速度 +8%', apply: (p) => { p.speed *= 1.08; } },
+    { id: 'leech', name: '吸血之牙', desc: '吸血 +4%', apply: (p) => { p.ls += 0.04; } },
+  ];
 
   const ENEMY_TYPES = {
     slime: { name: '史莱姆', hp: 24, atk: 5, def: 0, speed: 56, r: 7, xp: 3, cd: 0.85 },
@@ -64,6 +139,7 @@
       this.log = [];
       this.paused = false;
       this.pending = null;
+      this.pendingKind = '';
       this.pendingLevels = 0;
       this.t = 0;
       this.depth = 1;
@@ -83,6 +159,7 @@
       this.screen = 'playing';
       this.paused = false;
       this.pending = null;
+      this.pendingKind = '';
       this.pendingLevels = 0;
       this.events = [];
       this.log = [];
@@ -111,7 +188,12 @@
         gold: 0,
         potion: 1,
         revive: 0,
+        weapons: ['sword'],
+        weaponIndex: 0,
         weapon: WEAPONS.sword,
+        combo: 0,
+        frenzy: 0,
+        frenzyTimer: 0,
         aim: 0,
         cd: 0,
         invuln: 0,
@@ -122,6 +204,16 @@
       this.player.hp = this.player.maxHp;
 
       this.enterFloor(1);
+
+      // 开局三选一：先挑一把顺手的，选完才真正开始
+      this.pendingKind = 'starter';
+      this.pending = this.rng.shuffle(STARTER_WEAPONS).map((id) => ({
+        kind: 'weapon',
+        id,
+        name: WEAPONS[id].name,
+        desc: WEAPONS[id].desc,
+      }));
+      this.paused = true;
     }
 
     enterFloor(depth) {
@@ -488,6 +580,12 @@
       if (p.invuln > 0) p.invuln -= dt;
       if (p.hitFlash > 0) p.hitFlash -= dt;
 
+      // 匕首的狂热脱手就衰减
+      if (p.frenzyTimer > 0) {
+        p.frenzyTimer -= dt;
+        if (p.frenzyTimer <= 0) p.frenzy = 0;
+      }
+
       if (p.regen > 0) {
         p.regenPool += p.regen * dt;
         if (p.regenPool >= 1) {
@@ -509,8 +607,24 @@
     playerAttack() {
       const p = this.player;
       const w = p.weapon;
-      p.cd = w.cd * p.cdScale;
+      // 匕首的狂热：命中越多出手越快
+      const frenzyScale = w.trait === 'frenzy' ? 1 / (1 + p.frenzy) : 1;
+      p.cd = w.cd * p.cdScale * frenzyScale;
       this.emit({ type: 'swing', weapon: w.id });
+
+      let mult = w.mult;
+
+      // 铁剑：攒满三次命中后，第四击爆发
+      if (w.trait === 'combo' && p.combo >= 3) {
+        mult *= 1.8;
+        p.combo = 0;
+        this.emit({ type: 'combo', x: p.x, y: p.y });
+      }
+
+      // 长矛：出手瞬间向前突进，够到更远的目标
+      if (w.trait === 'lunge') {
+        this.moveBody(p, Math.cos(p.aim) * w.lunge, Math.sin(p.aim) * w.lunge);
+      }
 
       if (w.kind === 'melee') {
         const reach = w.reach + p.rangeBonus * TILE;
@@ -522,7 +636,7 @@
           if (d > reach + e.r) continue;
           const ang = Math.atan2(e.y - p.y, e.x - p.x);
           if (angleDelta(ang, p.aim) > w.arc / 2) continue;
-          this.damageEnemy(e, w.mult);
+          this.damageEnemy(e, mult, w);
           hitAny = true;
         }
         this.slashes.push({
@@ -533,6 +647,7 @@
           arc: w.arc,
           life: 0.13,
           max: 0.13,
+          weapon: w.id,
         });
         if (!hitAny) this.emit({ type: 'whiff' });
       } else {
@@ -544,11 +659,47 @@
           vx: Math.cos(a) * w.speed,
           vy: Math.sin(a) * w.speed,
           life: w.life,
-          mult: w.mult,
+          mult,
           from: 'player',
           r: 3,
+          pierce: w.pierce || 0,
+          hitIds: [],
+          weapon: w,
         });
       }
+    }
+
+    /** 切换已拥有的武器 */
+    switchWeapon(index) {
+      const p = this.player;
+      const i = Number(index);
+      if (!Number.isInteger(i) || i < 0 || i >= p.weapons.length) return false;
+      if (i === p.weaponIndex) return false;
+      p.weaponIndex = i;
+      p.weapon = WEAPONS[p.weapons[i]];
+      p.combo = 0;
+      p.frenzy = 0;
+      p.frenzyTimer = 0;
+      p.cd = Math.max(p.cd, 0.12); // 切枪有一点点硬直
+      this.emit({ type: 'swap', weapon: p.weapon.id });
+      return true;
+    }
+
+    /** 滚轮循环切换 */
+    cycleWeapon(step) {
+      const p = this.player;
+      if (p.weapons.length < 2) return false;
+      const n = p.weapons.length;
+      const next = (p.weaponIndex + (step > 0 ? 1 : -1) + n) % n;
+      return this.switchWeapon(next);
+    }
+
+    addWeapon(id) {
+      const p = this.player;
+      if (!WEAPONS[id] || p.weapons.includes(id)) return false;
+      p.weapons.push(id);
+      this.switchWeapon(p.weapons.length - 1);
+      return true;
     }
 
     /** 把指定格子的裂墙打穿；不是裂墙就返回 false */
@@ -573,14 +724,31 @@
       return false;
     }
 
-    damageEnemy(e, mult) {
+    damageEnemy(e, mult, weapon) {
       const p = this.player;
+      const w = weapon || p.weapon;
       const crit = this.rng.chance(p.crit);
       const total = mult * (crit ? 1.5 + p.critDmg : 1);
       const dmg = Math.max(1, Math.round(p.atk * total - e.def * 0.5));
       e.hp -= dmg;
       e.flash = 0.14;
       e.awake = true;
+
+      // 铁剑：命中累积连击层数
+      if (w.trait === 'combo') p.combo = Math.min(3, (p.combo || 0) + 1);
+
+      // 匕首：命中累积狂热，最多把攻速提到 2 倍出头
+      if (w.trait === 'frenzy') {
+        p.frenzy = Math.min(1.2, (p.frenzy || 0) + 0.1);
+        p.frenzyTimer = 2;
+      }
+
+      // 战锤：把目标砸退并减速
+      if (w.trait === 'knockback') {
+        const ang = Math.atan2(e.y - p.y, e.x - p.x);
+        this.moveBody(e, Math.cos(ang) * (w.knock || 20), Math.sin(ang) * (w.knock || 20));
+        e.slowTimer = w.slow || 1.2;
+      }
 
       const heal = Math.floor(dmg * p.ls);
       if (heal > 0) p.hp = Math.min(p.maxHp, p.hp + heal);
@@ -629,7 +797,8 @@
 
     rollChoices() {
       const picks = this.rng.shuffle(UPGRADE_POOL).slice(0, 3);
-      this.pending = picks.map((u) => ({ id: u.id, name: u.name, desc: u.desc }));
+      this.pending = picks.map((u) => ({ kind: 'upgrade', id: u.id, name: u.name, desc: u.desc }));
+      this.pendingKind = 'levelup';
       this.paused = true;
     }
 
@@ -637,13 +806,39 @@
       if (!this.pending) return;
       const pick = this.pending[index];
       if (!pick) return;
-      const up = UPGRADE_POOL.find((u) => u.id === pick.id);
-      if (up) up.apply(this.player);
-      this.addLog(`选择强化：${up.name} —— ${up.desc}`);
-      this.emit({ type: 'upgrade', id: pick.id });
-      this.pendingLevels--;
+      const p = this.player;
+
+      if (pick.kind === 'weapon') {
+        if (this.pendingKind === 'starter') {
+          // 开局三选一：直接成为第一把武器
+          p.weapons = [pick.id];
+          p.weaponIndex = 0;
+          p.weapon = WEAPONS[pick.id];
+          p.cd = 0;
+          this.addLog(`拿起了「${pick.name}」：${pick.desc}`);
+        } else {
+          this.addWeapon(pick.id);
+          this.addLog(`获得武器「${pick.name}」：${pick.desc}`);
+        }
+        this.emit({ type: 'upgrade', id: pick.id });
+      } else if (pick.kind === 'buff') {
+        const buff = BUFFS.find((b) => b.id === pick.id);
+        if (buff) buff.apply(p);
+        this.addLog(`获得「${pick.name}」：${pick.desc}`);
+        this.emit({ type: 'upgrade', id: pick.id });
+      } else {
+        const up = UPGRADE_POOL.find((u) => u.id === pick.id);
+        if (up) up.apply(p);
+        this.addLog(`选择强化：${up.name} —— ${up.desc}`);
+        this.emit({ type: 'upgrade', id: pick.id });
+        this.pendingLevels--;
+      }
+
       this.pending = null;
-      if (this.pendingLevels > 0) {
+      const wasStarter = this.pendingKind === 'starter';
+      this.pendingKind = '';
+
+      if (!wasStarter && this.pendingLevels > 0) {
         this.rollChoices();
       } else {
         this.paused = false;
@@ -735,6 +930,7 @@
       for (const e of alive) {
         if (e.flash > 0) e.flash -= dt;
         if (e.cd > 0) e.cd -= dt;
+        if (e.slowTimer > 0) e.slowTimer -= dt;
 
         const dx = p.x - e.x;
         const dy = p.y - e.y;
@@ -886,7 +1082,8 @@
 
         const len = Math.hypot(dx, dy);
         if (len < 0.001) continue;
-        this.moveBody(e, (dx / len) * e.speed * dt, (dy / len) * e.speed * dt);
+        const spd = e.slowTimer > 0 ? e.speed * 0.45 : e.speed;
+        this.moveBody(e, (dx / len) * spd * dt, (dy / len) * spd * dt);
       }
 
       // 阶段三：移动之后再轻推重叠的同伴。推得开就分开，推不开也不影响已经走完的路。
@@ -1007,14 +1204,22 @@
             let hit = null;
             for (const e of this.enemies) {
               if (e.dead) continue;
+              if (pr.hitIds && pr.hitIds.indexOf(e.id) !== -1) continue;
               if (dist2(pr.x, pr.y, e.x, e.y) < (e.r + pr.r) * (e.r + pr.r)) {
                 hit = e;
                 break;
               }
             }
             if (hit) {
-              this.damageEnemy(hit, pr.mult);
-              consumed = true;
+              this.damageEnemy(hit, pr.mult, pr.weapon);
+              if (pr.pierce > 0) {
+                // 穿透箭：继续飞，但不再打同一个目标
+                pr.pierce--;
+                if (!pr.hitIds) pr.hitIds = [];
+                pr.hitIds.push(hit.id);
+              } else {
+                consumed = true;
+              }
             }
           } else if (p.invuln <= 0 && dist2(pr.x, pr.y, p.x, p.y) < (p.hw + pr.r) * (p.hw + pr.r)) {
             this.hurtPlayer(pr.dmg, { type: 'bolt' });
@@ -1077,14 +1282,32 @@
         return true;
       }
       if (item.kind === 'chest') {
-        const options = Object.values(WEAPONS).filter((w) => w.id !== p.weapon.id);
-        const w = this.rng.pick(options);
-        p.weapon = w;
-        this.addLog(`打开宝箱，换上「${w.name}」（${w.desc}）。`);
-        this.emit({ type: 'pickup', kind: 'chest', weapon: w.id, x: item.x, y: item.y });
+        this.openChest(item);
         return true;
       }
       return true;
+    }
+
+    /** 宝箱：暂停游戏，在新武器与增益之间挑一个（最多三个选项） */
+    openChest(item) {
+      const p = this.player;
+      const fresh = Object.keys(WEAPONS).filter((id) => !p.weapons.includes(id));
+      const options = [];
+
+      for (const id of this.rng.shuffle(fresh).slice(0, 2)) {
+        options.push({ kind: 'weapon', id, name: WEAPONS[id].name, desc: WEAPONS[id].desc });
+      }
+      // 武器全收齐了就多给一个增益选项
+      const buffCount = options.length === 0 ? 2 : 1;
+      for (const b of this.rng.shuffle(BUFFS).slice(0, buffCount)) {
+        options.push({ kind: 'buff', id: b.id, name: b.name, desc: b.desc });
+      }
+
+      this.pending = options;
+      this.pendingKind = 'chest';
+      this.paused = true;
+      this.addLog('宝箱打开了，挑一样带走。');
+      this.emit({ type: 'pickup', kind: 'chest', weapon: null, x: item.x, y: item.y });
     }
 
     usePotion() {
@@ -1126,5 +1349,16 @@
     }
   }
 
-  return { World, TILE, MAX_FLOOR, WEAPONS, ENEMY_TYPES, META_COST, META_MAX, POTION_CAP };
+  return {
+    World,
+    TILE,
+    MAX_FLOOR,
+    WEAPONS,
+    STARTER_WEAPONS,
+    BUFFS,
+    ENEMY_TYPES,
+    META_COST,
+    META_MAX,
+    POTION_CAP,
+  };
 });

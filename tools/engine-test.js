@@ -50,7 +50,9 @@ function test(name, fn) {
 
 function newWorld(seed) {
   const w = new Engine.World(freshMeta(), seed || 20261101);
-  w.startRun();
+  w.startRun(seed || 20261101);
+  // 跳过开局的武器三选一，否则游戏处于暂停态，tick 不会推进
+  if (w.pending) w.resolveChoice(0);
   return w;
 }
 
@@ -491,6 +493,7 @@ test('真实地图上清醒的敌人绝大多数都能摸到玩家', () => {
   for (let seed = 1; seed <= 8; seed++) {
     const w = new Engine.World(freshMeta(), seed * 101);
     w.startRun(seed * 101);
+    if (w.pending) w.resolveChoice(0);
     w.player.invuln = 999999;
     const list = w.enemies.slice();
     for (let i = 0; i < 500; i++) w.tick(0.016, idle({ aimX: w.player.x, aimY: w.player.y }));
@@ -552,6 +555,120 @@ test('玩家远离且层主离岗时会回防', () => {
   const x0 = boss.x;
   for (let i = 0; i < 40; i++) w.tick(0.016, idle({ aimX: w.player.x, aimY: w.player.y }));
   assert.ok(boss.x < x0 - 5, `层主没有回防，x ${x0.toFixed(0)} -> ${boss.x.toFixed(0)}`);
+});
+
+test('五把武器都能命中并造成伤害', () => {
+  for (const id of Object.keys(Engine.WEAPONS)) {
+    const w = newWorld(4000 + id.length);
+    clearAround(w, 3);
+    const p = w.player;
+    p.weapons = [id];
+    p.weaponIndex = 0;
+    p.weapon = Engine.WEAPONS[id];
+    p.crit = 0;
+    const e = w.enemies.find((x) => !x.boss);
+    e.x = p.x + 16;
+    e.y = p.y;
+    e.hp = 99999;
+    e.awake = true;
+    const hp0 = e.hp;
+    for (let i = 0; i < 15; i++) {
+      p.cd = 0;
+      w.tick(0.016, idle({ firing: true, aimX: e.x, aimY: e.y }));
+    }
+    assert.ok(e.hp < hp0, `${id} 没有造成伤害`);
+  }
+});
+
+test('铁剑连中三次后第四击爆发', () => {
+  const w = newWorld(6000);
+  clearAround(w, 3);
+  const p = w.player;
+  p.weapons = ['sword'];
+  p.weaponIndex = 0;
+  p.weapon = Engine.WEAPONS.sword;
+  p.crit = 0;
+  p.atk = 10;
+  const e = w.enemies.find((x) => !x.boss);
+  e.x = p.x + 16;
+  e.y = p.y;
+  e.hp = 99999;
+  e.awake = true;
+  e.def = 0;
+
+  const hits = [];
+  for (let i = 0; i < 4; i++) {
+    const before = e.hp;
+    p.cd = 0;
+    w.tick(0.016, idle({ firing: true, aimX: e.x, aimY: e.y }));
+    hits.push(before - e.hp);
+  }
+  assert.ok(hits[3] > hits[0] * 1.3, `第四击没有爆发，四击伤害 ${hits.join(' / ')}`);
+});
+
+test('战锤会把敌人击退', () => {
+  const w = newWorld(6100);
+  clearAround(w, 4);
+  const p = w.player;
+  p.weapons = ['hammer'];
+  p.weaponIndex = 0;
+  p.weapon = Engine.WEAPONS.hammer;
+  p.crit = 0;
+  const e = w.enemies.find((x) => !x.boss);
+  e.x = p.x + 18;
+  e.y = p.y;
+  e.hp = 99999;
+  e.awake = true;
+  const x0 = e.x;
+  p.cd = 0;
+  w.tick(0.016, idle({ firing: true, aimX: e.x, aimY: e.y }));
+  assert.ok(e.x > x0 + 4, `敌人没有被击退：${x0.toFixed(0)} -> ${e.x.toFixed(0)}`);
+  assert.ok(e.slowTimer > 0, '敌人应被减速');
+});
+
+test('宝箱给出武器与增益二选一，选武器会入库', () => {
+  const w = newWorld(7000);
+  w.openChest({ x: w.player.x, y: w.player.y });
+  assert.ok(w.pending, '应弹出选择');
+  assert.strictEqual(w.paused, true);
+  assert.strictEqual(w.pendingKind, 'chest');
+  assert.ok(w.pending.some((o) => o.kind === 'buff'), '应有增益选项');
+  assert.ok(w.pending.some((o) => o.kind === 'weapon'), '应有武器选项');
+
+  const before = w.player.weapons.length;
+  const idx = w.pending.findIndex((o) => o.kind === 'weapon');
+  w.resolveChoice(idx);
+  assert.strictEqual(w.player.weapons.length, before + 1, '新武器应加入武器栏');
+  assert.strictEqual(w.paused, false);
+});
+
+test('开局三选一，选完才解除暂停', () => {
+  const w = new Engine.World(freshMeta(), 8000);
+  w.startRun(8000);
+  assert.strictEqual(w.paused, true, '开局应暂停等待选武器');
+  assert.strictEqual(w.pendingKind, 'starter');
+  assert.strictEqual(w.pending.length, 3, '应给三把武器');
+  const pick = w.pending[1];
+  w.resolveChoice(1);
+  assert.strictEqual(w.paused, false);
+  assert.deepStrictEqual(w.player.weapons, [pick.id]);
+  assert.strictEqual(w.player.weapon.id, pick.id);
+});
+
+test('可以在已拥有的武器间切换', () => {
+  const w = newWorld(8100);
+  w.player.weapons = ['sword'];
+  w.player.weaponIndex = 0;
+  w.player.weapon = Engine.WEAPONS.sword;
+  w.addWeapon('bow');
+  w.addWeapon('hammer');
+  assert.strictEqual(w.player.weapons.length, 3);
+  assert.strictEqual(w.player.weapon.id, 'hammer');
+  w.switchWeapon(0);
+  assert.strictEqual(w.player.weapon.id, w.player.weapons[0]);
+  w.cycleWeapon(1);
+  assert.strictEqual(w.player.weaponIndex, 1);
+  assert.strictEqual(w.switchWeapon(9), false, '越界不应切换');
 });
 
 console.log('实时引擎测试：');
