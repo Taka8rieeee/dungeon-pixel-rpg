@@ -509,6 +509,51 @@ test('真实地图上清醒的敌人绝大多数都能摸到玩家', () => {
   assert.ok(ratio < 0.06, `${frozen}/${awake} 只敌人卡住不动（${(ratio * 100).toFixed(1)}%），应低于 6%`);
 });
 
+test('玩家就在旁边时层主不会掉头回防', () => {
+  const w = newWorld(999);
+  const W = w.mapW;
+  for (let x = 2; x < 40; x++) w.tiles[10 * W + x] = MapGen.FLOOR;
+  const boss = w.enemies.find((e) => e.guard);
+  assert.ok(boss, '应有层主');
+  // 让层主离「家」很远，但玩家就在旁边
+  boss.homeX = 3 * TILE;
+  boss.homeY = 10.5 * TILE;
+  boss.x = 20 * TILE;
+  boss.y = 10.5 * TILE;
+  boss.awake = true;
+  boss.lostTimer = 0;
+  w.player.x = 22 * TILE;
+  w.player.y = 10.5 * TILE;
+  w.enemies = [boss];
+  w.updateFlow();
+
+  const d0 = Math.abs(boss.x - w.player.x);
+  for (let i = 0; i < 40; i++) w.tick(0.016, idle({ aimX: w.player.x, aimY: w.player.y }));
+  const d1 = Math.abs(boss.x - w.player.x);
+  assert.ok(d1 < d0, `层主反而远离了玩家：${d0.toFixed(0)} -> ${d1.toFixed(0)}`);
+});
+
+test('玩家远离且层主离岗时会回防', () => {
+  const w = newWorld(998);
+  const W = w.mapW;
+  for (let x = 2; x < 45; x++) w.tiles[10 * W + x] = MapGen.FLOOR;
+  const boss = w.enemies.find((e) => e.guard);
+  boss.homeX = 4 * TILE;
+  boss.homeY = 10.5 * TILE;
+  boss.x = 16 * TILE;
+  boss.y = 10.5 * TILE;
+  boss.awake = true;
+  boss.lostTimer = 0;
+  w.player.x = 41 * TILE;
+  w.player.y = 10.5 * TILE;
+  w.enemies = [boss];
+  w.updateFlow();
+
+  const x0 = boss.x;
+  for (let i = 0; i < 40; i++) w.tick(0.016, idle({ aimX: w.player.x, aimY: w.player.y }));
+  assert.ok(boss.x < x0 - 5, `层主没有回防，x ${x0.toFixed(0)} -> ${boss.x.toFixed(0)}`);
+});
+
 console.log('实时引擎测试：');
 let failed = 0;
 for (const [mark, name] of results) {

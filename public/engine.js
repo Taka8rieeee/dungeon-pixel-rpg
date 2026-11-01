@@ -759,10 +759,11 @@
           e.lostTimer = 0;
         }
 
-        // 守楼梯的层主：离开原位太远就回防，不追着玩家满地图跑
+        // 守楼梯的层主：只在「玩家也不在身边」时才回防，
+        // 否则会当着玩家的面掉头往回走，看起来就像卡住了
         if (e.guard) {
           const homeDist = Math.hypot(e.x - e.homeX, e.y - e.homeY);
-          if (homeDist > 96) {
+          if (homeDist > 96 && d > 260) {
             const bx = e.homeX - e.x;
             const by = e.homeY - e.y;
             const bl = Math.hypot(bx, by) || 1;
@@ -853,13 +854,13 @@
         e.px = e.x;
         e.py = e.y;
 
-        if (e.stuck > 0.4 && (dx || dy)) {
+        if (e.stuck > 0.8 && (dx || dy)) {
           // 卡住了：以期望方向为基准向两侧扫描，找第一个真的走得通的方向。
           // 单纯左右偏移在拐角处往往也是墙，必须实际探测。
           if (!e.side) e.side = this.rng.chance(0.5) ? 1 : -1;
           const base = Math.atan2(dy, dx);
           let found = null;
-          for (let k = 1; k <= 4 && !found; k++) {
+          for (let k = 1; k <= 2 && !found; k++) {
             for (let s = 0; s < 2 && !found; s++) {
               const a = base + (s === 0 ? 1 : -1) * e.side * k * (Math.PI / 4);
               const nx = Math.cos(a);
