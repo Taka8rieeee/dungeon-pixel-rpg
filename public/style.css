@@ -93,19 +93,22 @@ body.touch .touch-btn {
   display: flex;
 }
 
+/* 功能按钮绕右摇杆外侧排成弧线：正上 / 左上 / 正左，
+   间距按「摇杆半径 74px + 按钮半径 32px」计算，保证不与摇杆重叠 */
+
 body.touch .touch-btn:nth-of-type(1) {
-  bottom: 48vmin;
-  right: 12vmin;
+  bottom: calc(9vh + 190px);
+  right: calc(9vmin + 42px);
 }
 
 body.touch .touch-btn:nth-of-type(2) {
-  bottom: 34vmin;
-  right: 24vmin;
+  bottom: calc(9vh + 147px);
+  right: calc(9vmin + 147px);
 }
 
 body.touch .touch-btn:nth-of-type(3) {
-  bottom: 20vmin;
-  right: 31vmin;
+  bottom: calc(9vh + 42px);
+  right: calc(9vmin + 254px);
 }
 
 
