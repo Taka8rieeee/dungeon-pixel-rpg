@@ -152,6 +152,21 @@ body {
   opacity: 1;
 }
 
+/* 小地图：右上角，探索过的地方会画上去 */
+
+#minimap {
+  position: absolute;
+  top: 3.6em;
+  right: 0.7em;
+  image-rendering: pixelated;
+  background: rgba(6, 7, 12, 0.72);
+  border: 1px solid #2c2c42;
+  box-shadow: 0 0 0.4em rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+  opacity: 0.92;
+}
+
+
 #crash {
   position: absolute;
   left: 0.7em;

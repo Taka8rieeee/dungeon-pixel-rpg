@@ -20,6 +20,8 @@ const goldLabel = document.getElementById('goldLabel');
 const crystalLabel = document.getElementById('crystalLabel');
 const logEl = document.getElementById('log');
 const statsEl = document.getElementById('stats');
+const minimap = document.getElementById('minimap');
+const mctx = minimap.getContext('2d');
 
 let atlas = null;
 let atlasImg = null;
@@ -27,6 +29,8 @@ let world = null;
 let lastOverlayKey = '';
 let lastTime = 0;
 let saveTimer = 0;
+let mmTimer = 0;
+const MM_SCALE = 2;
 
 const keys = { up: false, down: false, left: false, right: false };
 const mouse = { sx: canvas.width / 2, sy: canvas.height / 2, wx: 0, wy: 0, down: false };
@@ -115,6 +119,13 @@ function loop(now) {
     draw();
     updateHud();
     updateOverlay();
+
+    // 小地图不用每帧重画，0.15 秒一次足够跟手
+    mmTimer -= dt;
+    if (mmTimer <= 0) {
+      mmTimer = 0.15;
+      drawMinimap();
+    }
   } catch (err) {
     reportError(err);
   }
@@ -543,6 +554,17 @@ function draw() {
       ctx.moveTo(sx, sy);
       ctx.lineTo(sx - (pr.vx / n) * 7, sy - (pr.vy / n) * 7);
       ctx.stroke();
+    } else if (pr.splash) {
+      // 炸弹：黑色圆球外面一圈跳动的火花，和邪术师的紫色暗影弹区分开
+      ctx.fillStyle = '#1c2026';
+      ctx.beginPath();
+      ctx.arc(sx, sy, pr.r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = `rgba(255,159,60,${0.6 + 0.4 * Math.sin(world.t * 22)})`;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.arc(sx, sy, pr.r + 2.5, 0, Math.PI * 2);
+      ctx.stroke();
     } else {
       ctx.fillStyle = '#b06bff';
       ctx.beginPath();
@@ -718,12 +740,78 @@ function updateHud() {
 
   const crit = Math.round(p.crit * 100);
   const ls = Math.round(p.ls * 100);
+  const aspd = (1 / Math.max(0.05, p.cdScale)).toFixed(2);
   const extra = p.revive > 0 ? '  护符 ×1' : '';
   const wlist = p.weapons.map((id) => Engine.WEAPONS[id].name).join(' · ');
   statsEl.textContent =
-    `攻 ${p.atk}  防 ${p.def}  暴 ${crit}%  吸血 ${ls}%${extra}` +
+    `攻 ${p.atk}  防 ${p.def}  暴 ${crit}%  速 ${aspd}x  吸血 ${ls}%${extra}` +
     `\nLv ${p.level}  XP ${p.xp}/${p.xpNext}  敌人 ${world.enemies.filter((e) => !e.dead).length}` +
     `\n${wlist}`;
+}
+
+/* ---------------- 小地图 ---------------- */
+
+/** 把已探索的地形画进右上角的小地图；楼梯、商店、视野内的敌人也标出来 */
+function drawMinimap() {
+  if (!world || !world.tiles || world.screen === 'title') {
+    minimap.width = 0;
+    return;
+  }
+  const w = world.mapW;
+  const h = world.mapH;
+  const pw = w * MM_SCALE;
+  const ph = h * MM_SCALE;
+  if (minimap.width !== pw || minimap.height !== ph) {
+    minimap.width = pw;
+    minimap.height = ph;
+  }
+
+  mctx.fillStyle = 'rgba(6, 7, 12, 0.85)';
+  mctx.fillRect(0, 0, pw, ph);
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (!world.explored[i]) continue;
+      const t = world.tiles[i];
+      let color = '#252b3d'; // 地板
+      if (t === '#') color = '#454a5e'; // 墙
+      else if (t === 'S') color = '#7a6aa8'; // 未开的裂墙
+      else if (t === '>') color = '#ffd45e'; // 楼梯
+      mctx.fillStyle = color;
+      mctx.fillRect(x * MM_SCALE, y * MM_SCALE, MM_SCALE, MM_SCALE);
+    }
+  }
+
+  // 商店与宝箱这类重要物品，探索到就常亮
+  for (const it of world.items) {
+    const tx = Math.floor(it.x / 16);
+    const ty = Math.floor(it.y / 16);
+    if (!world.explored[ty * w + tx]) continue;
+    if (it.kind === 'shop') mctx.fillStyle = '#ffd45e';
+    else if (it.kind === 'chest') mctx.fillStyle = '#c9a7ff';
+    else continue;
+    mctx.fillRect(tx * MM_SCALE - 1, ty * MM_SCALE - 1, MM_SCALE + 2, MM_SCALE + 2);
+  }
+
+  // 只标当前视野内的敌人，不然等于开全图挂
+  const vis = (x, y) => {
+    const tx = Math.floor(x / 16);
+    const ty = Math.floor(y / 16);
+    if (tx < 0 || ty < 0 || tx >= w || ty >= h) return false;
+    return world.visible[ty * w + tx] === 1;
+  };
+  mctx.fillStyle = '#ff5a5a';
+  for (const e of world.enemies) {
+    if (e.dead) continue;
+    if (!vis(e.x, e.y)) continue;
+    mctx.fillRect(Math.floor(e.x / 16) * MM_SCALE - 1, Math.floor(e.y / 16) * MM_SCALE - 1, MM_SCALE + 2, MM_SCALE + 2);
+  }
+
+  // 玩家
+  const p = world.player;
+  mctx.fillStyle = '#ffffff';
+  mctx.fillRect(Math.floor(p.x / 16) * MM_SCALE - 1, Math.floor(p.y / 16) * MM_SCALE - 1, MM_SCALE + 2, MM_SCALE + 2);
 }
 
 function escapeHtml(s) {

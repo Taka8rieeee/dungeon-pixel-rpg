@@ -6,8 +6,8 @@
   else root.MapGen = factory();
 })(typeof self !== 'undefined' ? self : this, function () {
 
-const W = 48;
-const H = 32;
+const W = 64;
+const H = 40;
 
 const WALL = '#';
 const FLOOR = '.';

@@ -126,6 +126,7 @@
     { id: 'crit', name: '锋锐符文', desc: '暴击率 +8%', apply: (p) => { p.crit += 0.08; } },
     { id: 'swift', name: '轻身靴', desc: '移动速度 +8%', apply: (p) => { p.speed *= 1.08; } },
     { id: 'leech', name: '吸血之牙', desc: '吸血 +4%', apply: (p) => { p.ls += 0.04; } },
+    { id: 'aspd', name: '疾风之石', desc: '攻击速度 +7%', apply: (p) => { p.cdScale *= 0.93; } },
   ];
 
   const ENEMY_TYPES = {
@@ -371,7 +372,7 @@
                 : depth <= 11
                   ? ['rat', 'archer', 'brute', 'wraith', 'bomber', 'golem']
                   : ['archer', 'brute', 'wraith', 'bomber', 'golem', 'golem'];
-      const count = Math.min(22, 7 + depth * 3);
+      const count = Math.min(28, 8 + depth * 3);
       for (let i = 0; i < count; i++) {
         const s = takeSpot(3);
         if (!s) break;
@@ -399,8 +400,9 @@
         const pos = at(s);
         this.items.push({ id: this.nextId++, x: pos.x, y: pos.y, kind, amount });
       };
-      const goldPiles = Math.min(14, 5 + depth);
-      for (let i = 0; i < goldPiles; i++) dropItem('gold', this.rng.int(4, 9) + Math.min(depth, 12) * 2);
+      // 金币：地上捡的少了，大头靠杀怪掉落（见 killEnemy）
+      const goldPiles = Math.min(10, 4 + depth);
+      for (let i = 0; i < goldPiles; i++) dropItem('gold', this.rng.int(2, 5) + Math.min(depth, 8));
       dropItem('potion');
       dropItem('potion');
       dropItem('chest');
@@ -416,7 +418,7 @@
           this.items.push({ id: this.nextId++, x: px, y: py, kind, amount });
         };
         put(s.x, s.y, 'chest');
-        put(s.x + s.w - 1, s.y, 'gold', 30 + depth * 10);
+        put(s.x + s.w - 1, s.y, 'gold', 25 + depth * 5);
         // 复活护符是稀有奖励，只有 10% 的隐藏房里有
         if (this.rng.chance(0.1)) put(s.x, s.y + s.h - 1, 'revive');
         this.addLog('这一层似乎藏着什么……（试试朝可疑的墙壁砍）');
@@ -1003,6 +1005,11 @@
       this.runStats.kills++;
       this.player.xp += e.xp;
       this.emit({ type: 'kill', x: e.x, y: e.y, name: e.name, boss: e.boss, final: e.summon });
+
+      // 尸体上掉一把金币：杀怪是金币的主要来源
+      let drop = this.rng.int(1, 2) + Math.round(this.depth * 0.6);
+      if (e.boss) drop += 8 + this.depth * 2;
+      this.items.push({ id: this.nextId++, x: e.x, y: e.y, kind: 'gold', amount: drop });
 
       if (e.boss) {
         // 深渊领主赏格更高

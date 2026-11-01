@@ -288,21 +288,21 @@ test('岔路选「收手」会回到标题并记录最深层', () => {
 
 test('怪物数值随层数小幅上升，深渊领主每 5 层出现', () => {
   const w = newWorld(1050);
-  const sample = (d) => {
-    w.threat = 0; // 先钉死威胁倍率，单独看层数成长
-    w.debugGoto(d);
-    return w.enemies.find((e) => !e.boss && e.type === 'slime') || w.enemies.find((e) => !e.boss);
-  };
   w.player.weapons = ['starter'];
   w.player.weapon = Engine.WEAPONS.starter;
+  w.threat = 0; // 钉死威胁倍率，单独看层数成长
 
-  const a = sample(1);
-  const hp1 = a.maxHp;
-  const atk1 = a.atk;
-  const b = sample(11);
-  assert.ok(b.maxHp > hp1, `第 11 层的怪应比第 1 层硬（${b.maxHp} vs ${hp1}）`);
-  assert.ok(b.atk > atk1, '第 11 层的怪应比第 1 层疼');
-  assert.ok(b.maxHp < hp1 * 4, `第 11 层血量涨幅应是小幅（${b.maxHp} vs ${hp1}）`);
+  const ratAt = (d) => {
+    w.debugGoto(d);
+    // 深层刷怪池随机，直接造一只同类对比
+    return w.spawnEnemy('rat', w.player.x, w.player.y + 40);
+  };
+
+  const a = ratAt(1);
+  const b = ratAt(11);
+  assert.ok(b.maxHp > a.maxHp, `第 11 层的怪应比第 1 层硬（${b.maxHp} vs ${a.maxHp}）`);
+  assert.ok(b.atk > a.atk, '第 11 层的怪应比第 1 层疼');
+  assert.ok(b.maxHp < a.maxHp * 3, `第 11 层血量涨幅应是小幅（${b.maxHp} vs ${a.maxHp}）`);
 
   assert.strictEqual(w.enemies.find((e) => e.boss).type, 'master', '第 11 层是普通层主');
   w.debugGoto(15);
@@ -1132,6 +1132,43 @@ test('隐藏房里的复活护符只有约 10%', () => {
   assert.ok(secretFloors > 120, `隐藏房样本太少：${secretFloors}`);
   const rate = withRevive / secretFloors;
   assert.ok(rate > 0.04 && rate < 0.18, `隐藏房护符刷新率应在 10% 左右，实际 ${(rate * 100).toFixed(1)}%（${withRevive}/${secretFloors}）`);
+});
+
+test('击杀怪物会掉金币', () => {
+  const w = newWorld(17000);
+  const before = w.items.filter((i) => i.kind === 'gold').length;
+  const e = w.spawnEnemy('slime', w.player.x, w.player.y + 40);
+  w.killEnemy(e);
+  const after = w.items.filter((i) => i.kind === 'gold').length;
+  assert.strictEqual(after, before + 1, '尸体上应多出一堆金币');
+  const dropped = w.items[w.items.length - 1];
+  assert.ok(dropped.amount >= 1, '掉落金额应至少为 1');
+  assert.ok(Math.abs(dropped.x - e.x) < 1 && Math.abs(dropped.y - e.y) < 1, '应掉在尸体位置');
+});
+
+test('地面金币比击杀掉落少：金币主要靠杀怪', () => {
+  let ground = 0;
+  let kill = 0;
+  for (let seed = 1; seed <= 12; seed++) {
+    const w = newWorld(17100 + seed);
+    ground += w.items.filter((i) => i.kind === 'gold').reduce((a, b) => a + b.amount, 0);
+    const before = w.items.filter((i) => i.kind === 'gold').reduce((a, b) => a + b.amount, 0);
+    for (const e of w.enemies.slice()) w.killEnemy(e);
+    kill += w.items.filter((i) => i.kind === 'gold').reduce((a, b) => a + b.amount, 0) - before;
+  }
+  assert.ok(ground < kill, `击杀掉落应是主要来源（地面 ${ground} vs 击杀 ${kill}）`);
+});
+
+test('疾风之石：攻击速度增益会缩短冷却', () => {
+  const aspd = Engine.BUFFS.find((b) => b.id === 'aspd');
+  assert.ok(aspd, 'BUFFS 里应存在攻速增益');
+  assert.ok(/攻击速度/.test(aspd.desc), '描述里应写明是攻速');
+
+  const w = newWorld(17200);
+  const before = w.player.cdScale;
+  aspd.apply(w.player);
+  assert.ok(w.player.cdScale < before, '应用后冷却应缩短');
+  assert.ok(before / w.player.cdScale < 1.15, `单件攻速加成不应过高（${(before / w.player.cdScale).toFixed(3)}x）`);
 });
 
 console.log('实时引擎测试：');
