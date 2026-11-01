@@ -485,6 +485,30 @@ test('两只敌人挤在单格走廊里不会互相顶死', () => {
   assert.ok(d1 < d0 - 100, `前面的敌人被同伙顶住了：${d0.toFixed(0)} -> ${d1.toFixed(0)}`);
 });
 
+test('真实地图上清醒的敌人绝大多数都能摸到玩家', () => {
+  let frozen = 0;
+  let awake = 0;
+  for (let seed = 1; seed <= 8; seed++) {
+    const w = new Engine.World(freshMeta(), seed * 101);
+    w.startRun(seed * 101);
+    w.player.invuln = 999999;
+    const list = w.enemies.slice();
+    for (let i = 0; i < 500; i++) w.tick(0.016, idle({ aimX: w.player.x, aimY: w.player.y }));
+    const snap = list.map((e) => ({ x: e.x, y: e.y }));
+    for (let i = 0; i < 60; i++) w.tick(0.016, idle({ aimX: w.player.x, aimY: w.player.y }));
+    list.forEach((e, i) => {
+      if (!e.awake || e.dead) return;
+      awake++;
+      const moved = Math.hypot(e.x - snap[i].x, e.y - snap[i].y);
+      const d = Math.hypot(e.x - w.player.x, e.y - w.player.y);
+      if (e.ranged && d < 220) return; // 远程怪主动保持距离
+      if (moved < 2.5 && d > 45) frozen++;
+    });
+  }
+  const ratio = awake ? frozen / awake : 0;
+  assert.ok(ratio < 0.06, `${frozen}/${awake} 只敌人卡住不动（${(ratio * 100).toFixed(1)}%），应低于 6%`);
+});
+
 console.log('实时引擎测试：');
 let failed = 0;
 for (const [mark, name] of results) {

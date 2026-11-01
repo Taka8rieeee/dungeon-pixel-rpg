@@ -75,8 +75,9 @@
 
     /* ---------------- 生命周期 ---------------- */
 
-    startRun() {
-      this.rng = new RNG((Date.now() ^ (Math.random() * 1e9)) >>> 0);
+    startRun(seed) {
+      // 传入 seed 可复现（测试用）；不传则每局随机
+      this.rng = new RNG(seed !== undefined ? seed : (Date.now() ^ (Math.random() * 1e9)) >>> 0);
       this.meta.runs = (this.meta.runs || 0) + 1;
       this.screen = 'playing';
       this.paused = false;
@@ -160,11 +161,15 @@
       this.stairs = { x: (f.stairs.x + 0.5) * TILE, y: (f.stairs.y + 0.5) * TILE, locked: depth < MAX_FLOOR };
       this.stairsTile = f.stairs;
 
-      // 可放置点：离出生点足够远的空地
+      // 可放置点：离出生点足够远，且必须和玩家处在同一连通区域。
+      // 隐藏房只通过裂墙相连，BFS 到不了，敌人若生在里面会永远出不来。
+      const reach = MapGen.bfsFrom(this.tiles, f.start.x, f.start.y).dist;
       const free = [];
       for (let y = 1; y < this.mapH - 1; y++) {
         for (let x = 1; x < this.mapW - 1; x++) {
-          if (this.tiles[y * this.mapW + x] !== MapGen.FLOOR) continue;
+          const i = y * this.mapW + x;
+          if (this.tiles[i] !== MapGen.FLOOR) continue;
+          if (reach[i] < 0) continue;
           if (x === f.start.x && y === f.start.y) continue;
           if (dist2(x, y, f.start.x, f.start.y) < 36) continue;
           free.push({ x, y });
@@ -192,7 +197,7 @@
       const bossType = depth === MAX_FLOOR ? 'overlord' : 'master';
       const sx = (f.stairs.x + 0.5) * TILE;
       const sy = (f.stairs.y + 0.5) * TILE;
-      const bossSpot = this.findFreeSpot(sx, sy, 4, Math.min(ENEMY_TYPES[bossType].r, 6));
+      const bossSpot = this.findFreeSpot(sx, sy, 4, Math.min(ENEMY_TYPES[bossType].r, 4));
       const boss = this.spawnEnemy(bossType, bossSpot.x, bossSpot.y);
       boss.awake = true;
 
@@ -258,8 +263,8 @@
     spawnEnemy(type, x, y) {
       const base = ENEMY_TYPES[type];
       const depth = this.depth;
-      // 物理碰撞盒必须小于一格（16px），否则大块头永远过不了走廊
-      const bodyR = Math.min(base.r, 6);
+      // 物理碰撞盒必须明显小于一格（16px），否则在走廊拐角处两个轴会同时被判为撞墙
+      const bodyR = Math.min(base.r, 4);
       // 出生点如果在墙里，实体永远移不出去，这里先挪到最近的空地
       if (this.blocked(x, y, bodyR, bodyR)) {
         const spot = this.findFreeSpot(x, y, 5, bodyR);
@@ -698,7 +703,8 @@
         const d = Math.hypot(dx, dy) || 1;
 
         if (!e.awake) {
-          if (d < 240) e.awake = true;
+          // 觉醒半径要覆盖整个可见屏幕，否则玩家看得见的怪却一直睡着，观感像卡住
+          if (d < 360) e.awake = true;
           else {
             e.dirX = 0;
             e.dirY = 0;
@@ -753,14 +759,11 @@
         } else {
           const stopAt = e.r + p.hw + 1;
           if (d > stopAt) {
-            if (clear) {
-              e.dirX = ux;
-              e.dirY = uy;
-            } else {
-              const s = this.flowDir(e);
-              e.dirX = s.x;
-              e.dirY = s.y;
-            }
+            // 一律走流场。直线只看几何不看碰撞盒宽度，贴着墙角时会出现
+            // 「看得见玩家但擦不过去」的死角，沿着格子级路径走才稳。
+            const s = this.flowDir(e);
+            e.dirX = s.x;
+            e.dirY = s.y;
           } else {
             e.dirX = 0;
             e.dirY = 0;
@@ -772,59 +775,75 @@
         }
       }
 
-      // 阶段二：叠加分离力后统一移动。
-      // 分离只作为「方向偏置」，不再直接对推两个实体，狭窄走廊里才不会互相顶死。
+      // 阶段二：按各自方向移动。分离不参与方向计算，保证前进永远不被同伴阻断。
       for (const e of alive) {
-        let sx = 0;
-        let sy = 0;
-        for (const o of alive) {
-          if (o === e) continue;
-          const dx = e.x - o.x;
-          const dy = e.y - o.y;
-          const min = e.r + o.r;
-          const d2 = dx * dx + dy * dy;
-          if (d2 > min * min || d2 < 0.01) continue;
-          const d = Math.sqrt(d2);
-          const push = 1 - d / min;
-          sx += (dx / d) * push;
-          sy += (dy / d) * push;
-        }
+        let dx = e.dirX;
+        let dy = e.dirY;
 
-        let mx = e.dirX + sx * 0.9;
-        let my = e.dirY + sy * 0.9;
-
-        // 分离力若与前进方向相反，只保留垂直分量。
-        // 否则在只能容一人的走廊里，后排会把前排往后顶，两只怪一起卡死。
-        const dlen = Math.hypot(e.dirX, e.dirY);
-        if (dlen > 0.01) {
-          const nx = e.dirX / dlen;
-          const ny = e.dirY / dlen;
-          const back = (sx * nx + sy * ny) * 0.9;
-          if (back < 0) {
-            mx -= nx * back;
-            my -= ny * back;
-          }
-        }
-
-        // 卡住检测：连续一段时间几乎没位移，就侧向绕一小步打破僵局
-        const moved = Math.hypot(e.x - (e.px === undefined ? e.x : e.px), e.y - (e.py === undefined ? e.y : e.py));
-        if (moved < 0.25) {
+        // 卡住检测：醒来却原地不动时，侧向绕一步打破僵局（墙角、同伴堵门、流场抖动）
+        const px = e.px === undefined ? e.x : e.px;
+        const py = e.py === undefined ? e.y : e.py;
+        const moved = Math.hypot(e.x - px, e.y - py);
+        if (moved < 0.2 && (dx || dy)) {
           e.stuck = (e.stuck || 0) + dt;
         } else {
           e.stuck = 0;
           e.side = 0;
         }
-        if (e.stuck > 0.45) {
-          if (!e.side) e.side = this.rng.chance(0.5) ? 1 : -1;
-          mx += -e.dirY * e.side * 1.5;
-          my += e.dirX * e.side * 1.5;
-        }
         e.px = e.x;
         e.py = e.y;
 
-        const len = Math.hypot(mx, my);
+        if (e.stuck > 0.4 && (dx || dy)) {
+          // 卡住了：以期望方向为基准向两侧扫描，找第一个真的走得通的方向。
+          // 单纯左右偏移在拐角处往往也是墙，必须实际探测。
+          if (!e.side) e.side = this.rng.chance(0.5) ? 1 : -1;
+          const base = Math.atan2(dy, dx);
+          let found = null;
+          for (let k = 1; k <= 4 && !found; k++) {
+            for (let s = 0; s < 2 && !found; s++) {
+              const a = base + (s === 0 ? 1 : -1) * e.side * k * (Math.PI / 4);
+              const nx = Math.cos(a);
+              const ny = Math.sin(a);
+              if (!this.blocked(e.x + nx * 4, e.y + ny * 4, e.hw, e.hh)) found = { x: nx, y: ny };
+            }
+          }
+          if (found) {
+            dx = found.x;
+            dy = found.y;
+          }
+        }
+
+        const len = Math.hypot(dx, dy);
         if (len < 0.001) continue;
-        this.moveBody(e, (mx / len) * e.speed * dt, (my / len) * e.speed * dt);
+        this.moveBody(e, (dx / len) * e.speed * dt, (dy / len) * e.speed * dt);
+      }
+
+      // 阶段三：移动之后再轻推重叠的同伴。推得开就分开，推不开也不影响已经走完的路。
+      for (let i = 0; i < alive.length; i++) {
+        const a = alive[i];
+        for (let j = i + 1; j < alive.length; j++) {
+          const b = alive[j];
+          const dx = b.x - a.x;
+          const dy = b.y - a.y;
+          const min = a.r + b.r;
+          const d2 = dx * dx + dy * dy;
+          if (d2 > min * min) continue;
+          const d = Math.sqrt(d2);
+          let nx;
+          let ny;
+          if (d < 0.001) {
+            // 完全重合时没有方向可言，随机挑一个方向弹开
+            const ang = this.rng.float() * Math.PI * 2;
+            nx = Math.cos(ang);
+            ny = Math.sin(ang);
+          } else {
+            nx = dx / d;
+            ny = dy / d;
+          }
+          const push = (min - d) * 0.4;
+          this.moveBody(a, -nx * push, -ny * push);
+          this.moveBody(b, nx * push, ny * push);
+        }
       }
     }
 
