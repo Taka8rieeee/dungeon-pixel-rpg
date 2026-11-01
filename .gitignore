@@ -1,6 +1,9 @@
 # 运行时数据（局外存档由 src/save.js 自动创建目录）
 data/
 
+# 便携分发包（含 80MB 的 node.exe，不进版本库）
+release/
+
 # 依赖（本项目零依赖，兜底）
 node_modules/
 
