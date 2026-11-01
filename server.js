@@ -159,7 +159,9 @@ function listen(port, attempt = 0) {
     }
   });
   server.listen(port, '127.0.0.1', () => {
-    const url = `http://localhost:${port}`;
+    // PORT=0 时由系统随机分配，以实际绑定的端口为准
+    const actual = server.address().port;
+    const url = `http://localhost:${actual}`;
     console.log('');
     console.log('  地牢像素 RPG（实时版）已启动');
     console.log(`  浏览器打开：${url}`);
