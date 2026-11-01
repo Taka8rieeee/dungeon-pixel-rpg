@@ -497,6 +497,16 @@
       }
     }
 
+    /** 把指定格子的裂墙打穿；不是裂墙就返回 false */
+    breakWall(tx, ty) {
+      if (this.tileAt(tx, ty) !== MapGen.SECRET) return false;
+      this.tiles[ty * this.mapW + tx] = MapGen.FLOOR;
+      this.addLog('墙壁裂开了，里面别有洞天！');
+      this.emit({ type: 'secret', x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE });
+      this.updateFov();
+      return true;
+    }
+
     /** 近战挥击时顺带把正前方的裂墙砍开 */
     tryBreakSecret(reach) {
       const p = this.player;
@@ -504,12 +514,7 @@
         const d = (reach + 8) * (i / 2);
         const tx = Math.floor((p.x + Math.cos(p.aim) * d) / TILE);
         const ty = Math.floor((p.y + Math.sin(p.aim) * d) / TILE);
-        if (this.tileAt(tx, ty) !== MapGen.SECRET) continue;
-        this.tiles[ty * this.mapW + tx] = MapGen.FLOOR;
-        this.addLog('墙壁裂开了，里面别有洞天！');
-        this.emit({ type: 'secret', x: (tx + 0.5) * TILE, y: (ty + 0.5) * TILE });
-        this.updateFov();
-        return true;
+        if (this.breakWall(tx, ty)) return true;
       }
       return false;
     }
@@ -732,36 +737,55 @@
       for (const pr of this.projectiles) {
         pr.life -= dt;
         if (pr.life <= 0) continue;
-        pr.x += pr.vx * dt;
-        pr.y += pr.vy * dt;
 
-        const tx = Math.floor(pr.x / TILE);
-        const ty = Math.floor(pr.y / TILE);
-        if (this.isSolidTile(tx, ty)) {
-          this.emit({ type: 'impact', x: pr.x, y: pr.y });
-          continue;
-        }
+        // 分步推进：单帧位移可能超过一格，整段推进会让箭矢穿过薄墙和敌人
+        const travel = Math.hypot(pr.vx, pr.vy) * dt;
+        const steps = Math.max(1, Math.ceil(travel / 8));
+        const dx = (pr.vx * dt) / steps;
+        const dy = (pr.vy * dt) / steps;
+        let consumed = false;
 
-        if (pr.from === 'player') {
-          let hit = null;
-          for (const e of this.enemies) {
-            if (e.dead) continue;
-            if (dist2(pr.x, pr.y, e.x, e.y) < (e.r + pr.r) * (e.r + pr.r)) {
-              hit = e;
-              break;
+        for (let s = 0; s < steps && !consumed; s++) {
+          pr.x += dx;
+          pr.y += dy;
+
+          const tx = Math.floor(pr.x / TILE);
+          const ty = Math.floor(pr.y / TILE);
+          const t = this.tileAt(tx, ty);
+
+          if (t === MapGen.SECRET) {
+            // 箭矢也能打穿裂墙；只有玩家的箭算数，敌人的弹丸不会替玩家开路
+            if (pr.from === 'player') this.breakWall(tx, ty);
+            this.emit({ type: 'impact', x: pr.x, y: pr.y });
+            consumed = true;
+            break;
+          }
+          if (t === MapGen.WALL) {
+            this.emit({ type: 'impact', x: pr.x, y: pr.y });
+            consumed = true;
+            break;
+          }
+
+          if (pr.from === 'player') {
+            let hit = null;
+            for (const e of this.enemies) {
+              if (e.dead) continue;
+              if (dist2(pr.x, pr.y, e.x, e.y) < (e.r + pr.r) * (e.r + pr.r)) {
+                hit = e;
+                break;
+              }
             }
-          }
-          if (hit) {
-            this.damageEnemy(hit, pr.mult);
-            continue;
-          }
-        } else {
-          if (p.invuln <= 0 && dist2(pr.x, pr.y, p.x, p.y) < (p.hw + pr.r) * (p.hw + pr.r)) {
+            if (hit) {
+              this.damageEnemy(hit, pr.mult);
+              consumed = true;
+            }
+          } else if (p.invuln <= 0 && dist2(pr.x, pr.y, p.x, p.y) < (p.hw + pr.r) * (p.hw + pr.r)) {
             this.hurtPlayer(pr.dmg, { type: 'bolt' });
-            continue;
+            consumed = true;
           }
         }
-        keep.push(pr);
+
+        if (!consumed) keep.push(pr);
       }
       this.projectiles = keep;
     }

@@ -306,6 +306,112 @@ test('层主会主动接近玩家', () => {
   assert.ok(d1 < d0, `层主没靠近：${d0.toFixed(1)} -> ${d1.toFixed(1)}`);
 });
 
+test('远程箭矢能打破隐藏墙', () => {
+  let w = null;
+  let wall = null;
+  for (let seed = 1; seed <= 40 && !wall; seed++) {
+    const cand = newWorld(seed * 977);
+    for (let y = 1; y < cand.mapH - 1 && !wall; y++) {
+      for (let x = 1; x < cand.mapW - 1; x++) {
+        if (cand.tiles[y * cand.mapW + x] === MapGen.SECRET) {
+          wall = { x, y };
+          w = cand;
+          break;
+        }
+      }
+    }
+  }
+  assert.ok(wall, '40 张图里一个隐藏房都没找到');
+
+  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  let stand = null;
+  for (const [dx, dy] of dirs) {
+    const sx = wall.x - dx;
+    const sy = wall.y - dy;
+    if (w.tileAt(sx, sy) === MapGen.FLOOR) {
+      stand = { x: sx, y: sy };
+      break;
+    }
+  }
+  assert.ok(stand, '裂墙周围没有可站的格子');
+
+  const p = w.player;
+  p.x = (stand.x + 0.5) * TILE;
+  p.y = (stand.y + 0.5) * TILE;
+  p.weapon = Engine.WEAPONS.bow;
+  p.invuln = 99;
+
+  const aimX = (wall.x + 0.5) * TILE;
+  const aimY = (wall.y + 0.5) * TILE;
+
+  for (let i = 0; i < 30 && w.tileAt(wall.x, wall.y) === MapGen.SECRET; i++) {
+    p.cd = 0;
+    w.tick(0.016, idle({ firing: true, aimX, aimY }));
+  }
+  assert.strictEqual(w.tileAt(wall.x, wall.y), MapGen.FLOOR, '箭矢没能打破裂墙');
+});
+
+test('近战也能打破隐藏墙', () => {
+  let w = null;
+  let wall = null;
+  for (let seed = 1; seed <= 40 && !wall; seed++) {
+    const cand = newWorld(seed * 613);
+    for (let y = 1; y < cand.mapH - 1 && !wall; y++) {
+      for (let x = 1; x < cand.mapW - 1; x++) {
+        if (cand.tiles[y * cand.mapW + x] === MapGen.SECRET) {
+          wall = { x, y };
+          w = cand;
+          break;
+        }
+      }
+    }
+  }
+  assert.ok(wall, '40 张图里一个隐藏房都没找到');
+
+  const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  let stand = null;
+  for (const [dx, dy] of dirs) {
+    const sx = wall.x - dx;
+    const sy = wall.y - dy;
+    if (w.tileAt(sx, sy) === MapGen.FLOOR) {
+      stand = { x: sx, y: sy };
+      break;
+    }
+  }
+  assert.ok(stand, '裂墙周围没有可站的格子');
+
+  const p = w.player;
+  p.x = (stand.x + 0.5) * TILE;
+  p.y = (stand.y + 0.5) * TILE;
+  p.weapon = Engine.WEAPONS.sword;
+  p.invuln = 99;
+  p.cd = 0;
+  w.tick(0.016, idle({ firing: true, aimX: (wall.x + 0.5) * TILE, aimY: (wall.y + 0.5) * TILE }));
+  assert.strictEqual(w.tileAt(wall.x, wall.y), MapGen.FLOOR, '近战没能打破裂墙');
+});
+
+test('高速箭矢不会穿过墙壁', () => {
+  const w = newWorld(2718);
+  clearAround(w, 2);
+  const p = w.player;
+  const pt = w.playerTile();
+  // 右边两格都砌成墙
+  w.tiles[pt.y * w.mapW + (pt.x + 1)] = MapGen.WALL;
+  w.tiles[pt.y * w.mapW + (pt.x + 2)] = MapGen.WALL;
+  p.weapon = Engine.WEAPONS.bow;
+  p.invuln = 99;
+  p.cd = 0;
+  // 用最大步长（50ms）发射并推进，检查有没有漏过墙
+  for (let i = 0; i < 6; i++) {
+    w.tick(0.05, idle({ firing: i === 0, aimX: (pt.x + 1.5) * TILE, aimY: (pt.y + 0.5) * TILE }));
+    for (const pr of w.projectiles) {
+      const tx = Math.floor(pr.x / TILE);
+      const ty = Math.floor(pr.y / TILE);
+      assert.ok(!w.isSolidTile(tx, ty), `箭矢陷在墙里 (${pr.x.toFixed(1)},${pr.y.toFixed(1)})`);
+    }
+  }
+});
+
 console.log('实时引擎测试：');
 let failed = 0;
 for (const [mark, name] of results) {
