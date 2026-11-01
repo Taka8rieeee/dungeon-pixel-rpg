@@ -231,6 +231,36 @@ function addSecretRoom(rng, tiles) {
 }
 
 /**
+ * 洞穴层常常是一大片空地，怪全堆在里面。随机立几根石柱当掩体。
+ * 只挑「周围 8 格全是地板」的位置，立完之后仍然可以从旁边绕过去，不会切断通路。
+ */
+function sprinklePillars(rng, tiles, start, stairs) {
+  const candidates = [];
+  for (let y = 2; y < H - 2; y++) {
+    for (let x = 2; x < W - 2; x++) {
+      if (tiles[idx(x, y)] !== FLOOR) continue;
+      if (Math.abs(x - start.x) + Math.abs(y - start.y) < 7) continue;
+      if (Math.abs(x - stairs.x) + Math.abs(y - stairs.y) < 4) continue;
+      let open = true;
+      for (let dy = -1; dy <= 1 && open; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (dx === 0 && dy === 0) continue;
+          if (tiles[idx(x + dx, y + dy)] !== FLOOR) {
+            open = false;
+            break;
+          }
+        }
+      }
+      if (open) candidates.push({ x, y });
+    }
+  }
+  const n = Math.min(16, Math.floor(candidates.length / 9));
+  const chosen = rng.shuffle(candidates).slice(0, n);
+  for (const s of chosen) tiles[idx(s.x, s.y)] = WALL;
+  return chosen.length;
+}
+
+/**
  * 生成一层。
  * @returns {{tiles:string[], rooms:Array, start:{x,y}, stairs:{x,y}, secret:object|null, isCave:boolean}}
  */
@@ -265,6 +295,7 @@ function generateFloor(rng, depth) {
     tiles[idx(stairs.x, stairs.y)] = STAIRS;
 
     const secret = addSecretRoom(rng, tiles);
+    if (isCave) sprinklePillars(rng, tiles, start, stairs);
     return { tiles, rooms, start, stairs, secret, isCave, w: W, h: H };
   }
 

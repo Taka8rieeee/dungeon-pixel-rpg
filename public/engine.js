@@ -177,53 +177,71 @@
       }
       const spots = this.rng.shuffle(free);
 
-      // 敌人：明快刷怪，数量随层数上升
+      const used = [];
+      /** 取一个与已用点至少隔开 minGap 格的位置，敌人与掉落物都靠它分配 */
+      const takeSpot = (minGap) => {
+        for (let i = 0; i < spots.length; i++) {
+          const s = spots[i];
+          if (!s) continue;
+          let ok = true;
+          for (const u of used) {
+            if (dist2(s.x, s.y, u.x, u.y) < minGap * minGap) {
+              ok = false;
+              break;
+            }
+          }
+          if (!ok) continue;
+          used.push(s);
+          spots[i] = null;
+          return s;
+        }
+        return null;
+      };
+      const at = (s) => ({ x: (s.x + 0.5) * TILE, y: (s.y + 0.5) * TILE });
+
+      // 敌人：数量随层数上升，但彼此至少隔开 3 格，不会在一片空场里堆成一团
       const pool =
         depth <= 1
           ? ['slime', 'rat', 'rat', 'slime']
           : depth <= 2
             ? ['slime', 'rat', 'archer', 'slime', 'rat']
             : depth <= 4
-              ? ['slime', 'rat', 'archer', 'brute', 'rat', 'archer']
-              : ['brute', 'archer', 'slime', 'archer', 'brute'];
-      const count = Math.min(30, 9 + depth * 4);
-      let cursor = 0;
-      for (let i = 0; i < count && cursor < spots.length; i++, cursor++) {
+              ? ['slime', 'rat', 'archer', 'brute', 'rat']
+              : ['brute', 'archer', 'slime', 'brute'];
+      const count = Math.min(22, 7 + depth * 3);
+      for (let i = 0; i < count; i++) {
+        const s = takeSpot(3);
+        if (!s) break;
         const type = pool[Math.floor(this.rng.float() * pool.length)];
-        this.spawnEnemy(type, (spots[cursor].x + 0.5) * TILE, (spots[cursor].y + 0.5) * TILE);
+        const pos = at(s);
+        this.spawnEnemy(type, pos.x, pos.y);
       }
 
       // 层主 / 最终 Boss 守在楼梯旁（先找一个真正站得下的位置，别塞进墙里）
       const bossType = depth === MAX_FLOOR ? 'overlord' : 'master';
       const sx = (f.stairs.x + 0.5) * TILE;
       const sy = (f.stairs.y + 0.5) * TILE;
-      const bossSpot = this.findFreeSpot(sx, sy, 4, Math.min(ENEMY_TYPES[bossType].r, 4));
+      // 站在楼梯旁边而不是楼梯格上，并和其他怪保持距离
+      const bossBody = Math.min(ENEMY_TYPES[bossType].r, 4);
+      const bossSpot = this.findFreeSpot(sx, sy, 4, bossBody, true, this.enemies);
       const boss = this.spawnEnemy(bossType, bossSpot.x, bossSpot.y);
-      boss.awake = true;
+      // 层主不主动出击：守着楼梯，玩家靠近才应战，走远了就回原位
+      boss.guard = true;
+      boss.awake = false;
 
-      // 物品
-      const itemSpots = spots.slice(cursor);
-      let ic = 0;
+      // 物品：和敌人共用同一套取点逻辑，不会叠在一起
+      const dropItem = (kind, amount) => {
+        const s = takeSpot(2);
+        if (!s) return;
+        const pos = at(s);
+        this.items.push({ id: this.nextId++, x: pos.x, y: pos.y, kind, amount });
+      };
       const goldPiles = 5 + depth;
-      for (let i = 0; i < goldPiles && ic < itemSpots.length; i++, ic++) {
-        this.items.push({
-          id: this.nextId++,
-          x: (itemSpots[ic].x + 0.5) * TILE,
-          y: (itemSpots[ic].y + 0.5) * TILE,
-          kind: 'gold',
-          amount: this.rng.int(4, 9) + depth * 2,
-        });
-      }
-      for (let i = 0; i < 2 && ic < itemSpots.length; i++, ic++) {
-        this.items.push({ id: this.nextId++, x: (itemSpots[ic].x + 0.5) * TILE, y: (itemSpots[ic].y + 0.5) * TILE, kind: 'potion' });
-      }
-      if (ic < itemSpots.length) {
-        this.items.push({ id: this.nextId++, x: (itemSpots[ic].x + 0.5) * TILE, y: (itemSpots[ic].y + 0.5) * TILE, kind: 'chest' });
-        ic++;
-      }
-      if (ic < itemSpots.length && this.rng.chance(depth >= 3 ? 0.16 : 0.08)) {
-        this.items.push({ id: this.nextId++, x: (itemSpots[ic].x + 0.5) * TILE, y: (itemSpots[ic].y + 0.5) * TILE, kind: 'revive' });
-      }
+      for (let i = 0; i < goldPiles; i++) dropItem('gold', this.rng.int(4, 9) + depth * 2);
+      dropItem('potion');
+      dropItem('potion');
+      dropItem('chest');
+      if (this.rng.chance(depth >= 3 ? 0.16 : 0.08)) dropItem('revive');
 
       // 隐藏房奖励
       if (f.secret) {
@@ -245,15 +263,24 @@
     }
 
     /** 从指定点向外螺旋找第一个放得下实体（半径 r）的空地，找不到就返回原点 */
-    findFreeSpot(cx, cy, maxR, r) {
-      if (!this.blocked(cx, cy, r, r)) return { x: cx, y: cy };
+    findFreeSpot(cx, cy, maxR, r, skipOrigin, avoid) {
+      const usable = (x, y) => {
+        if (this.blocked(x, y, r, r)) return false;
+        if (avoid) {
+          for (const o of avoid) {
+            if (dist2(x, y, o.x, o.y) < (2 * TILE) * (2 * TILE)) return false;
+          }
+        }
+        return true;
+      };
+      if (!skipOrigin && usable(cx, cy)) return { x: cx, y: cy };
       for (let ring = 1; ring <= maxR; ring++) {
         for (let dy = -ring; dy <= ring; dy++) {
           for (let dx = -ring; dx <= ring; dx++) {
             if (Math.abs(dx) !== ring && Math.abs(dy) !== ring) continue;
             const x = cx + dx * TILE;
             const y = cy + dy * TILE;
-            if (!this.blocked(x, y, r, r)) return { x, y };
+            if (usable(x, y)) return { x, y };
           }
         }
       }
@@ -300,6 +327,12 @@
         dead: false,
         vx: 0,
         vy: 0,
+        homeX: x,
+        homeY: y,
+        guard: false,
+        lostTimer: 0,
+        dirX: 0,
+        dirY: 0,
       };
       this.enemies.push(e);
       return e;
@@ -702,12 +735,39 @@
         const dy = p.y - e.y;
         const d = Math.hypot(dx, dy) || 1;
 
+        // 索敌：只对身边一小圈有反应，避免下到新层后整张地图一起扑过来
         if (!e.awake) {
-          // 觉醒半径要覆盖整个可见屏幕，否则玩家看得见的怪却一直睡着，观感像卡住
-          if (d < 360) e.awake = true;
-          else {
+          const notice = e.guard ? 165 : 200;
+          if (d < notice) {
+            e.awake = true;
+          } else {
             e.dirX = 0;
             e.dirY = 0;
+            continue;
+          }
+        } else if (!e.guard && d > 330) {
+          // 跟丢了就重新睡下，别让它穿越大半个地图来追
+          e.lostTimer += dt;
+          if (e.lostTimer > 3.5) {
+            e.awake = false;
+            e.lostTimer = 0;
+            e.dirX = 0;
+            e.dirY = 0;
+            continue;
+          }
+        } else {
+          e.lostTimer = 0;
+        }
+
+        // 守楼梯的层主：离开原位太远就回防，不追着玩家满地图跑
+        if (e.guard) {
+          const homeDist = Math.hypot(e.x - e.homeX, e.y - e.homeY);
+          if (homeDist > 96) {
+            const bx = e.homeX - e.x;
+            const by = e.homeY - e.y;
+            const bl = Math.hypot(bx, by) || 1;
+            e.dirX = bx / bl;
+            e.dirY = by / bl;
             continue;
           }
         }

@@ -397,10 +397,7 @@ function draw() {
       } else if (t === '>') sprite('stairs', sx, sy);
       else sprite('floor_' + (['a', 'b', 'c'][(tx * 7 + ty * 13) % 3]), sx, sy);
 
-      if (!vis) {
-        ctx.fillStyle = 'rgba(4,4,8,0.74)';
-        ctx.fillRect(sx, sy, TILE, TILE);
-      }
+      // 探索过的地形永久照亮：只跳过未探索的格子，不再压暗影
     }
   }
 
