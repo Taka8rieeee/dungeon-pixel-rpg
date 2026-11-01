@@ -406,6 +406,100 @@ h2 {
   text-align: center;
 }
 
+/* 商店 */
+
+.shop-gold {
+  font-size: 0.82em;
+  color: var(--dim);
+  text-align: center;
+  margin-bottom: 0.7em;
+}
+
+.shop-gold b {
+  color: var(--gold);
+  font-size: 1.25em;
+}
+
+.shop-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.42em;
+  width: 100%;
+  max-width: 34em;
+}
+
+.shop-row {
+  display: flex;
+  align-items: center;
+  gap: 0.7em;
+  padding: 0.55em 0.8em;
+  background: linear-gradient(to bottom, #1d2030, #14161f);
+  border: 1px solid #3a3a52;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.shop-row:hover:not(:disabled) {
+  border-color: var(--gold);
+  background: #232739;
+}
+
+.shop-row .key {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.4em;
+  height: 1.4em;
+  border: 1px solid #4a4a66;
+  color: var(--gold);
+  font-size: 0.8em;
+}
+
+.shop-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15em;
+  min-width: 0;
+}
+
+.shop-name {
+  font-size: 0.95em;
+  color: #fff;
+}
+
+.shop-desc {
+  font-size: 0.74em;
+  color: #9a9ab4;
+}
+
+.shop-price {
+  flex: 0 0 auto;
+  font-size: 0.82em;
+  color: var(--gold);
+}
+
+.shop-row.poor .shop-price {
+  color: #c8566c;
+}
+
+.shop-row:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.shop-row.sold .shop-name {
+  color: #7a7a94;
+  text-decoration: line-through;
+}
+
+.shop-row.sold .shop-price {
+  color: #6a6a84;
+}
+
 .results {
   font-size: 0.95em;
   line-height: 1.9;

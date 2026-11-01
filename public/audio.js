@@ -117,6 +117,11 @@ const Sound = (() => {
     pickupRevive() {
       [440, 554, 659].forEach((f, i) => tone({ from: f, dur: 0.28, gain: 0.12, wave: 'sine', delay: i * 0.05 }));
     },
+    buy() {
+      noise({ from: 2400, to: 900, dur: 0.06, gain: 0.1, filter: 'highpass' });
+      tone({ from: 1180, dur: 0.07, gain: 0.13, wave: 'sine' });
+      tone({ from: 784, dur: 0.14, gain: 0.1, wave: 'triangle', delay: 0.06 });
+    },
     levelup() {
       [523, 659, 784, 1047].forEach((f, i) => tone({ from: f, dur: 0.16, gain: 0.14, wave: 'triangle', delay: i * 0.075 }));
     },

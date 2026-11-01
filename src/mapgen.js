@@ -168,8 +168,14 @@ function bfsFrom(tiles, sx, sy) {
   return { dist, farthest, visited: queue };
 }
 
-/** 在已有房间外挖一个隐藏房，用一格「裂墙」连接（要求房间外一圈全是实心墙） */
-function addSecretRoom(rng, tiles) {
+/**
+ * 在已有区域外挖一个独立小房间，用一格墙做入口。
+ * doorType 决定它是隐藏房（裂墙，需要砍开）还是商店（普通门口，直接走进去）。
+ * @param {string} doorType FLOOR = 敞开；SECRET = 裂墙
+ * @param {{from?:{x,y}, minDist?:number, avoid?:{x,y}, avoidDist?:number}} [opts]
+ */
+function addSideRoom(rng, tiles, doorType, opts) {
+  const o = opts || {};
   const dirs = [
     [1, 0],
     [-1, 0],
@@ -177,12 +183,19 @@ function addSecretRoom(rng, tiles) {
     [0, -1],
   ];
 
+  const farEnough = (x, y) => {
+    if (o.from && Math.abs(x - o.from.x) + Math.abs(y - o.from.y) < (o.minDist || 0)) return false;
+    if (o.avoid && Math.abs(x - o.avoid.x) + Math.abs(y - o.avoid.y) < (o.avoidDist || 0)) return false;
+    return true;
+  };
+
   for (const size of [3, 2, 1]) {
     const candidates = [];
 
     for (let y = 2; y < H - 2; y++) {
       for (let x = 2; x < W - 2; x++) {
         if (tiles[idx(x, y)] !== FLOOR) continue;
+        if (!farEnough(x, y)) continue;
 
         for (const [dx, dy] of dirs) {
           const wx = x + dx;
@@ -225,8 +238,16 @@ function addSecretRoom(rng, tiles) {
     if (!candidates.length) continue;
     const c = rng.pick(candidates);
     carveRect(tiles, c.x0, c.y0, c.size, c.size);
-    tiles[idx(c.wx, c.wy)] = SECRET;
-    return { x: c.x0, y: c.y0, w: c.size, h: c.size, cx: c.x0 + (c.size >> 1), cy: c.y0 + (c.size >> 1) };
+    tiles[idx(c.wx, c.wy)] = doorType;
+    return {
+      x: c.x0,
+      y: c.y0,
+      w: c.size,
+      h: c.size,
+      cx: c.x0 + (c.size >> 1),
+      cy: c.y0 + (c.size >> 1),
+      door: { x: c.wx, y: c.wy },
+    };
   }
   return null;
 }
@@ -362,11 +383,14 @@ function generateFloor(rng, depth) {
     stairs = { x: farthest % W, y: Math.floor(farthest / W) };
     tiles[idx(stairs.x, stairs.y)] = STAIRS;
 
-    // 先撒石块再挖隐藏房：反过来的话，碎石可能切断通往裂墙的路径，
+    // 先撒石块再挖特殊房间：反过来的话，碎石可能切断通往裂墙的路径，
     // 隐藏房会被后面的「孤立区域填实」整个吞掉
     if (isCave) sprinkleRocks(rng, tiles, start, stairs);
-    const secret = addSecretRoom(rng, tiles);
-    return { tiles, rooms, start, stairs, secret, isCave, w: W, h: H };
+    // 商店：敞开门口的房间，每层一间，逼玩家离开出生点去找
+    const shop = addSideRoom(rng, tiles, FLOOR, { from: start, minDist: 9, avoid: stairs, avoidDist: 4 });
+    // 隐藏房：每层 50% 概率，入口是裂墙
+    const secret = rng.chance(0.5) ? addSideRoom(rng, tiles, SECRET) : null;
+    return { tiles, rooms, start, stairs, secret, shop, isCave, w: W, h: H };
   }
 
   // 极端情况下的兜底：一个矩形房间
@@ -375,7 +399,7 @@ function generateFloor(rng, depth) {
   start = { x: 6, y: 6 };
   stairs = { x: 16, y: 12 };
   tiles[idx(stairs.x, stairs.y)] = STAIRS;
-  return { tiles, rooms: [], start, stairs, secret: null, isCave: false, w: W, h: H };
+  return { tiles, rooms: [], start, stairs, secret: null, shop: null, isCave: false, w: W, h: H };
 }
 
 return {

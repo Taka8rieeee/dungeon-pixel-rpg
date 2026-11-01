@@ -97,6 +97,15 @@
   /** 武器栏只有两格；开局只有一根破木棒，好武器得进去抢 */
   const WEAPON_SLOTS = 2;
 
+  /**
+   * 商店定价。复活护符是招牌货：攒到第 2 层才买得起，买完基本就买不动别的了；
+   * 武器与增益统一按 75 折定价（便宜 25%）。
+   */
+  const SHOP_PRICE = {
+    revive: 100,
+    item: 75,
+  };
+
   /** 宝箱里除了新武器，还能换到的增益 */
   const BUFFS = [
     { id: 'atk', name: '磨刀石', desc: '攻击力 +2', apply: (p) => { p.atk += 2; } },
@@ -154,6 +163,7 @@
       this.pendingLevels = 0;
       this.pendingChest = null;
       this.pendingSkip = false;
+      this.shop = null;
       this.t = 0;
       this.depth = 1;
       this.fovTimer = 0;
@@ -176,6 +186,7 @@
       this.pendingLevels = 0;
       this.pendingChest = null;
       this.pendingSkip = false;
+      this.shop = null;
       this.events = [];
       this.log = [];
       this.t = 0;
@@ -356,9 +367,22 @@
         };
         put(s.x, s.y, 'chest');
         put(s.x + s.w - 1, s.y, 'gold', 30 + depth * 10);
-        put(s.x, s.y + s.h - 1, 'revive');
+        // 复活护符是稀有奖励，只有 10% 的隐藏房里有
+        if (this.rng.chance(0.1)) put(s.x, s.y + s.h - 1, 'revive');
         this.addLog('这一层似乎藏着什么……（试试朝可疑的墙壁砍）');
       }
+
+      // 商店：敞开门口的房间，商品随层刷新
+      if (f.shop) {
+        this.items.push({
+          id: this.nextId++,
+          x: (f.shop.cx + 0.5) * TILE,
+          y: (f.shop.cy + 0.5) * TILE,
+          kind: 'shop',
+          stock: this.rollShopStock(),
+        });
+      }
+      this.shop = null;
 
       this.addLog(`—— 第 ${depth} 层 · ${f.isCave ? '潮湿洞窟' : '石砌地牢'} ——`);
       this.updateFov();
@@ -1341,18 +1365,18 @@
           continue;
         }
         const d2 = dist2(it.x, it.y, p.x, p.y);
-        // 宝箱开过但玩家点了「都不想要」：箱子留在原地，
-        // 必须走开一段再回来才会重新弹窗，否则站在箱子上会无限弹。
-        if (it.kind === 'chest') {
+        // 宝箱与商店：踩上去触发，但都不会因此消失，
+        // 必须走开一段再回来才会重新触发，否则站在上面会每帧弹窗。
+        if (it.kind === 'chest' || it.kind === 'shop') {
           if (it.armed === false && d2 > 30 * 30) it.armed = true;
           if (it.armed === false || d2 >= 13 * 13) {
             keep.push(it);
             continue;
           }
-          // 箱子只有在真正选了东西之后才消失（见 consumePendingChest）
           it.armed = false;
           keep.push(it);
-          this.openChest(it);
+          if (it.kind === 'chest') this.openChest(it);
+          else this.openShop(it);
           continue;
         }
         if (d2 >= 13 * 13) {
@@ -1474,6 +1498,94 @@
       return true;
     }
 
+    /** 商店上架：两件武器 + 两个增益，另有 50% 概率摆一个生命护符 */
+    rollShopStock() {
+      const p = this.player;
+      const stock = [];
+      const fresh = this.rng.shuffle(
+        Object.keys(WEAPONS).filter((id) => id !== 'starter' && !p.weapons.includes(id)),
+      );
+      const buffs = this.rng.shuffle(BUFFS.slice());
+
+      for (let i = 0; i < 2 && i < fresh.length; i++) {
+        const id = fresh[i];
+        stock.push({
+          kind: 'weapon',
+          id,
+          name: WEAPONS[id].name,
+          desc: WEAPONS[id].desc,
+          price: SHOP_PRICE.item,
+          sold: false,
+        });
+      }
+      // 武器被买光/拿光时用增益补位，保证货架不会空着
+      const need = 4 - stock.length;
+      for (let i = 0; i < Math.max(2, need) && i < buffs.length; i++) {
+        const b = buffs[i];
+        stock.push({ kind: 'buff', id: b.id, name: b.name, desc: b.desc, price: SHOP_PRICE.item, sold: false });
+      }
+      if (p.revive <= 0 && this.rng.chance(0.5)) {
+        stock.push({
+          kind: 'revive',
+          id: 'revive',
+          name: '生命护符',
+          desc: '死亡时自动复活一次（买下后常驻背包）',
+          price: SHOP_PRICE.revive,
+          sold: false,
+        });
+      }
+      return stock;
+    }
+
+    openShop(item) {
+      if (item) item.armed = false;
+      this.shop = { stock: item ? item.stock : [], item };
+      this.paused = true;
+      this.addLog('推开店门，货架上明码标价。');
+    }
+
+    /** 买下货架上的第 index 件商品，返回是否成交 */
+    buyShop(index) {
+      const shop = this.shop;
+      if (!shop) return false;
+      const it = shop.stock[index];
+      if (!it || it.sold) return false;
+      const p = this.player;
+
+      // 武器可能在开箱/捡地上武器时已经拿到手了，撤下但不扣钱
+      if (it.kind === 'weapon' && p.weapons.includes(it.id)) {
+        it.sold = true;
+        this.addLog(`「${it.name}」你已经有了一把，老板收回了货。`);
+        return false;
+      }
+      if (p.gold < it.price) {
+        this.addLog(`金币不够，「${it.name}」要 ${it.price}。`);
+        return false;
+      }
+
+      p.gold -= it.price;
+      it.sold = true;
+
+      if (it.kind === 'weapon') {
+        this.gainWeapon(it.id);
+      } else if (it.kind === 'buff') {
+        const buff = BUFFS.find((b) => b.id === it.id);
+        if (buff) buff.apply(p);
+      } else if (it.kind === 'revive') {
+        p.revive = 1;
+      }
+
+      this.addLog(`花掉 ${it.price} 金币，买下「${it.name}」。`);
+      this.emit({ type: 'buy', id: it.id, price: it.price });
+      return true;
+    }
+
+    closeShop() {
+      if (!this.shop) return;
+      this.shop = null;
+      this.paused = false;
+    }
+
     usePotion() {
       const p = this.player;
       if (p.potion <= 0) {
@@ -1520,6 +1632,7 @@
     WEAPONS,
     WEAPON_SLOTS,
     BUFFS,
+    SHOP_PRICE,
     ENEMY_TYPES,
     META_COST,
     META_MAX,

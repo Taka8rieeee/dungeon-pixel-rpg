@@ -810,6 +810,128 @@ test('站在被跳过的箱子上不会反复弹窗，走开再回来才重新�
   assert.strictEqual(w.pendingChest, chest, '重新打开的应是同一个箱子');
 });
 
+test('每层都有商店，货架与价格符合定价', () => {
+  let reviveListed = 0;
+  for (let seed = 1; seed <= 40; seed++) {
+    const w = newWorld(11000 + seed);
+    const shop = w.items.find((i) => i.kind === 'shop');
+    assert.ok(shop, `种子 ${seed} 的第 1 层没有商店`);
+    assert.ok(shop.stock.length >= 4 && shop.stock.length <= 5, `货架件数异常：${shop.stock.length}`);
+    assert.ok(shop.stock.some((s) => s.kind === 'weapon'), '货架应至少有一把武器');
+    for (const s of shop.stock) {
+      const expect = s.kind === 'revive' ? Engine.SHOP_PRICE.revive : Engine.SHOP_PRICE.item;
+      assert.strictEqual(s.price, expect, `${s.name} 价格不对`);
+      assert.strictEqual(s.sold, false);
+    }
+    if (shop.stock.some((s) => s.kind === 'revive')) reviveListed++;
+  }
+  assert.ok(reviveListed > 8 && reviveListed < 32, `护符上架率应在 50% 上下，实际 ${reviveListed}/40`);
+  assert.ok(
+    Math.abs(Engine.SHOP_PRICE.item / Engine.SHOP_PRICE.revive - 0.75) < 0.01,
+    '武器与增益应比护符便宜约 25%',
+  );
+});
+
+test('商店可以买护符、买卖扣钱、钱不够买不了', () => {
+  let found = null;
+  for (let seed = 1; seed <= 60 && !found; seed++) {
+    const w = newWorld(12000 + seed);
+    const shop = w.items.find((i) => i.kind === 'shop');
+    if (shop && shop.stock.some((s) => s.kind === 'revive')) found = { w, shop };
+  }
+  assert.ok(found, '没找到上架护符的商店');
+  const { w, shop } = found;
+
+  w.openShop(shop);
+  assert.ok(w.shop, '应打开商店');
+  assert.strictEqual(w.paused, true);
+
+  const ri = w.shop.stock.findIndex((s) => s.kind === 'revive');
+  const price = w.shop.stock[ri].price;
+
+  w.player.gold = price - 1;
+  assert.strictEqual(w.buyShop(ri), false, '钱不够不该成交');
+  assert.strictEqual(w.player.gold, price - 1, '失败不应扣钱');
+
+  w.player.gold = price + 30;
+  assert.strictEqual(w.buyShop(ri), true);
+  assert.strictEqual(w.player.gold, 30, '应扣掉护符的价格');
+  assert.strictEqual(w.player.revive, 1);
+  assert.strictEqual(w.buyShop(ri), false, '同一件不能重复买');
+  assert.strictEqual(w.player.gold, 30, '重复购买不应再扣钱');
+
+  w.closeShop();
+  assert.strictEqual(w.paused, false);
+  assert.strictEqual(w.shop, null);
+});
+
+test('商店买的增益与武器会真的生效', () => {
+  let found = null;
+  for (let seed = 1; seed <= 60 && !found; seed++) {
+    const w = newWorld(13000 + seed);
+    const shop = w.items.find((i) => i.kind === 'shop');
+    if (shop && shop.stock.some((s) => s.kind === 'buff')) found = { w, shop };
+  }
+  const { w, shop } = found;
+  w.openShop(shop);
+  const bi = w.shop.stock.findIndex((s) => s.kind === 'buff');
+  const buffId = w.shop.stock[bi].id;
+  const before = w.player.atk + w.player.maxHp + w.player.crit * 100 + w.player.speed + w.player.ls * 100;
+  w.player.gold = 500;
+  assert.strictEqual(w.buyShop(bi), true);
+  const after = w.player.atk + w.player.maxHp + w.player.crit * 100 + w.player.speed + w.player.ls * 100;
+  assert.notStrictEqual(after, before, `增益 ${buffId} 买完没有任何变化`);
+
+  const wi = w.shop.stock.findIndex((s) => s.kind === 'weapon' && !s.sold);
+  if (wi >= 0) {
+    const wid = w.shop.stock[wi].id;
+    assert.strictEqual(w.buyShop(wi), true);
+    assert.ok(w.player.weapons.includes(wid), '买到的新武器应在武器栏里');
+  }
+});
+
+test('站在商店上不会反复弹窗，走开再回来能重新进', () => {
+  const w = newWorld(14000);
+  clearAround(w, 3);
+  const shop = { id: 7001, x: w.player.x, y: w.player.y, kind: 'shop', stock: w.rollShopStock() };
+  w.items.push(shop);
+
+  w.tick(0.016, idle());
+  assert.ok(w.shop, '踩到商店应该打开');
+  w.closeShop();
+
+  for (let i = 0; i < 60; i++) w.tick(0.016, idle());
+  assert.strictEqual(w.shop, null, '站在原地不该反复弹商店');
+
+  w.player.x += 40;
+  w.tick(0.016, idle());
+  w.player.x -= 40;
+  w.tick(0.016, idle());
+  assert.ok(w.shop, '走开再回来应能重新进店');
+});
+
+test('隐藏房里的复活护符只有约 10%', () => {
+  let secretFloors = 0;
+  let withRevive = 0;
+  for (let seed = 1; seed <= 300; seed++) {
+    const w = newWorld(15000 + seed);
+    const f = w.map;
+    if (!f.secret) continue;
+    secretFloors++;
+    const s = f.secret;
+    // 隐藏房左下角是护符的固定刷新点
+    const px = (s.x + 0.5) * TILE;
+    const py = (s.y + s.h - 1 + 0.5) * TILE;
+    const hit = w.items.some(
+      (it) => it.kind === 'revive' && Math.abs(it.x - px) < 4 && Math.abs(it.y - py) < 4,
+    );
+    if (hit) withRevive++;
+  }
+  assert.ok(secretFloors > 120, `隐藏房样本太少：${secretFloors}`);
+  const rate = withRevive / secretFloors;
+  assert.ok(rate > 0.04 && rate < 0.18, `隐藏房护符刷新率应在 10% 左右，实际 ${(rate * 100).toFixed(1)}%（${withRevive}/${secretFloors}）`);
+});
+
 console.log('实时引擎测试：');
 let failed = 0;
 for (const [mark, name] of results) {

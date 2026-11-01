@@ -92,7 +92,7 @@ function loop(now) {
   try {
     if (world) {
       // 自愈：升级暂停却没弹出选项时，强制恢复，避免永久卡住
-      if (world.paused && !world.pending) {
+      if (world.paused && !world.pending && !world.shop) {
         world.paused = false;
         world.pendingLevels = 0;
       }
@@ -140,6 +140,15 @@ document.addEventListener('keydown', (ev) => {
   Sound.unlock();
   const k = ev.key.toLowerCase();
   if (k.startsWith('arrow') || k === ' ') ev.preventDefault();
+
+  if (world && world.shop) {
+    if (k === 'escape') {
+      world.closeShop();
+      return;
+    }
+    if (k >= '1' && k <= '9') world.buyShop(Number(k) - 1);
+    return;
+  }
 
   if (world && world.pending) {
     if (k === 'escape') {
@@ -277,6 +286,10 @@ function handleEvent(ev) {
     case 'levelup':
       Sound.play('levelup');
       addFloater(world.player.x, world.player.y, `Lv.${ev.level}`, '#8fd4ff', 14);
+      break;
+    case 'buy':
+      Sound.play('buy');
+      addFloater(world.player.x, world.player.y, `-${ev.price}`, '#ffd45e', 12);
       break;
     case 'pickup':
       Sound.playPickup(ev.kind);
@@ -462,6 +475,24 @@ function draw() {
       ctx.strokeText(wn.slice(0, 1), ix + TILE / 2, iy - 4);
       ctx.fillStyle = '#8fd4ff';
       ctx.fillText(wn.slice(0, 1), ix + TILE / 2, iy - 4);
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
+      continue;
+    }
+
+    if (it.kind === 'shop') {
+      // 商店柜台：宝箱图标 + 金色底边 + 「商」字，和普通宝箱一眼分清
+      sprite('chest', ix, iy);
+      ctx.fillStyle = 'rgba(255,206,84,0.95)';
+      ctx.fillRect(ix + 1, iy + TILE - 3, TILE - 2, 2);
+      ctx.font = 'bold 9px ui-monospace, Consolas, monospace';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(0,0,0,0.85)';
+      ctx.strokeText('商', ix + TILE / 2, iy - 4);
+      ctx.fillStyle = '#ffd45e';
+      ctx.fillText('商', ix + TILE / 2, iy - 4);
       ctx.textAlign = 'left';
       ctx.textBaseline = 'alphabetic';
       continue;
@@ -673,6 +704,18 @@ function escapeHtml(s) {
 function updateOverlay() {
   if (!world) return;
 
+  // 商店：可以连续购买，所以不靠「选一个就关」，单独一条显示线
+  if (world.shop) {
+    const gold = world.player.gold;
+    const sk = 'shop:' + world.shop.stock.map((s) => (s.sold ? '1' : '0')).join('') + ':' + gold;
+    if (sk !== lastOverlayKey) {
+      lastOverlayKey = sk;
+      overlayInner.innerHTML = shopHtml();
+    }
+    overlay.classList.remove('hidden');
+    return;
+  }
+
   // 升级选择优先，且每次都确保遮罩处于可见状态（不能靠 key 缓存决定是否显示）
   if (world.pending) {
     const ck = 'choice:' + world.pendingKind + ':' + (world.pendingSkip ? 'skip:' : '') + world.pending.map((c) => c.id).join(',');
@@ -781,6 +824,38 @@ function choiceHtml() {
     </div>`;
 }
 
+function shopHtml() {
+  const p = world.player;
+  const stock = world.shop.stock;
+  const rows = stock
+    .map((it, i) => {
+      const owned = it.kind === 'weapon' && p.weapons.includes(it.id);
+      const soldOut = it.sold || owned;
+      const afford = p.gold >= it.price;
+      const price = soldOut ? '已售出' : `${it.price} 金币`;
+      const cls = soldOut ? 'sold' : afford ? '' : 'poor';
+      return `
+        <button class="shop-row ${cls}" data-act="buy" data-index="${i}" ${soldOut || !afford ? 'disabled' : ''}>
+          <span class="key">${i + 1}</span>
+          <span class="shop-main">
+            <span class="shop-name">${escapeHtml(it.name)}</span>
+            <span class="shop-desc">${escapeHtml(it.desc)}</span>
+          </span>
+          <span class="shop-price">${price}</span>
+        </button>`;
+    })
+    .join('');
+
+  return `
+    <div class="choice-panel">
+      <div class="choice-title">商店</div>
+      <div class="shop-gold">金币 <b>${p.gold}</b>${p.revive > 0 ? ' · 已持有生命护符' : ''}</div>
+      <div class="shop-list">${rows}</div>
+      <button class="choice-skip" data-act="leave">离开（Esc）</button>
+      <div class="choice-hint">买完可以继续挑，走出门口就关门</div>
+    </div>`;
+}
+
 function deadHtml() {
   const d = world.deathInfo || { floor: 1, kills: 0, crystals: 0 };
   return `
@@ -821,6 +896,8 @@ overlay.addEventListener('click', (ev) => {
   else if (act === 'upgrade') buyUpgrade(btn.dataset.stat);
   else if (act === 'choose') world.resolveChoice(Number(btn.dataset.index));
   else if (act === 'skip') world.skipPending();
+  else if (act === 'buy') world.buyShop(Number(btn.dataset.index));
+  else if (act === 'leave') world.closeShop();
 });
 
 /* ---------------- 流程 ---------------- */
