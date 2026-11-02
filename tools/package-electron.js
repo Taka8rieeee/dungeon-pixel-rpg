@@ -55,6 +55,7 @@ function main() {
   fs.copyFileSync(path.join(ROOT, 'README.md'), path.join(APP, 'README.md'));
   copyDir(path.join(ROOT, 'public'), path.join(APP, 'public'));
   copyDir(path.join(ROOT, 'src'), path.join(APP, 'src'));
+  copyDir(path.join(ROOT, 'net'), path.join(APP, 'net')); // 联机模块
 
   // 3. 说明（UTF-8 BOM）
   const readme = [

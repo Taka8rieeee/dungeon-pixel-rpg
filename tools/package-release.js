@@ -21,7 +21,7 @@ const OUT = path.join(ROOT, 'release', '地牢像素RPG');
 
 // 游戏本体需要的文件，其余（docs/tools/.git/data…）都不进包
 const COPY_FILES = ['server.js', 'package.json', 'README.md'];
-const COPY_DIRS = ['public', 'src'];
+const COPY_DIRS = ['public', 'src', 'net']; // net 是联机模块，缺了会静默降级成单机
 
 function copyDir(src, dest) {
   fs.mkdirSync(dest, { recursive: true });
