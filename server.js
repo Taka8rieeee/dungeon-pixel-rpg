@@ -160,7 +160,10 @@ try {
 }
 
 if (lobby) {
+  const liveConns = new Set();
   net.attach(server, (conn) => {
+    liveConns.add(conn);
+    conn.on('close', () => liveConns.delete(conn));
     conn.on('message', (raw) => {
       let msg;
       try {
@@ -181,7 +184,31 @@ if (lobby) {
       const room = conn.data.room;
       if (room) room.leave(conn);
     });
+
+    // 心跳：手机切后台、断 Wi-Fi、公网中间隔着反代时，TCP 可能一直不关，
+    // 甚至代理会代答 WS 层的 pong。所以以「应用层是否有消息」为准判断死活。
+    conn.data.lastSeen = Date.now();
+    conn.on('message', () => {
+      conn.data.lastSeen = Date.now();
+    });
   }, { path: '/ws' });
+
+  // 每 15 秒检查一次：30 秒没有任何消息（含客户端心跳）就断开并摘出房间
+  setInterval(() => {
+    const now = Date.now();
+    for (const conn of liveConns) {
+      if (conn.closed) {
+        liveConns.delete(conn);
+        continue;
+      }
+      if (now - (conn.data.lastSeen || now) > 30000) {
+        console.warn('心跳超时，断开一个连接');
+        conn.close(1001, 'timeout');
+        continue;
+      }
+      conn.ping(); // 顺带给直连场景做个快速探测
+    }
+  }, 15000).unref();
 }
 
 function listen(port, attempt = 0) {
