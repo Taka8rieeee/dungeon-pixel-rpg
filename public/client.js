@@ -128,7 +128,15 @@ function loop(now) {
         world.paused = false;
         world.pendingLevels = 0;
       }
-      if (world.screen === 'playing' && !world.paused) {
+      if (NET.on) {
+        // 联机：世界由服务器模拟，本地只上报输入 + 自己算视野
+        netSendInput(dt);
+        NET.fovTimer -= dt;
+        if (NET.fovTimer <= 0 && world.player && world.tiles) {
+          NET.fovTimer = 0.1;
+          world.updateFov();
+        }
+      } else if (world.screen === 'playing' && !world.paused) {
         world.tick(dt, buildInput());
       }
       const evs = world.drainEvents();
@@ -181,26 +189,33 @@ document.addEventListener('keydown', (ev) => {
   if (k.startsWith('arrow') || k === ' ') ev.preventDefault();
 
   if (world && world.restPrompt) {
-    if (k === 'enter' || k === ' ' || k === 'y') world.continueRun();
-    else if (k === 'escape' || k === 'n') world.endRun();
+    if (k === 'enter' || k === ' ' || k === 'y') {
+      if (!netAct('continue')) world.continueRun();
+    } else if (k === 'escape' || k === 'n') {
+      if (!netAct('retire')) world.endRun();
+    }
     return;
   }
 
   if (world && world.shop) {
     if (k === 'escape') {
-      world.closeShop();
+      if (!netAct('closeShop')) world.closeShop();
       return;
     }
-    if (k >= '1' && k <= '9') world.buyShop(Number(k) - 1);
+    if (k >= '1' && k <= '9') {
+      if (!netAct('buy', { i: Number(k) - 1 })) world.buyShop(Number(k) - 1);
+    }
     return;
   }
 
   if (world && world.pending) {
     if (k === 'escape') {
-      world.skipPending();
+      if (!netAct('skip')) world.skipPending();
       return;
     }
-    if (k >= '1' && k <= '9') world.resolveChoice(Number(k) - 1);
+    if (k >= '1' && k <= '9') {
+      if (!netAct('choose', { i: Number(k) - 1 })) world.resolveChoice(Number(k) - 1);
+    }
     return;
   }
 
@@ -214,12 +229,14 @@ document.addEventListener('keydown', (ev) => {
     return;
   }
   if (k >= '1' && k <= '9') {
-    world.switchWeapon(Number(k) - 1);
+    if (!netAct('switch', { i: Number(k) - 1 })) world.switchWeapon(Number(k) - 1);
     return;
   }
-  if (k === 'q') world.usePotion();
-  else if (k === 'e') world.pickupWeaponNearby();
-  else if (k === 'm') Sound.toggle();
+  if (k === 'q') {
+    if (!netAct('potion')) world.usePotion();
+  } else if (k === 'e') {
+    if (!netAct('pick')) world.pickupWeaponNearby();
+  } else if (k === 'm') Sound.toggle();
 });
 
 canvas.addEventListener(
@@ -227,7 +244,8 @@ canvas.addEventListener(
   (ev) => {
     if (!world || world.screen !== 'playing' || world.pending) return;
     ev.preventDefault();
-    world.cycleWeapon(ev.deltaY > 0 ? 1 : -1);
+    const step = ev.deltaY > 0 ? 1 : -1;
+    if (!netAct('cycle', { i: step })) world.cycleWeapon(step);
   },
   { passive: false },
 );
@@ -433,7 +451,7 @@ function setupTouch() {
 /* ---------------- 相机 ---------------- */
 
 function updateCamera(dt) {
-  if (!world || !world.map) return;
+  if (!world || !world.map || !world.player) return;
   const p = world.player;
   const maxX = Math.max(0, world.mapW * TILE - canvas.width);
   const maxY = Math.max(0, world.mapH * TILE - canvas.height);
@@ -606,6 +624,8 @@ function draw() {
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   if (!world || world.screen === 'title' || !world.tiles || !atlasImg) return;
+  // 联机刚收到地图、还没收到第一帧快照时还没有玩家实体，这一帧直接跳过
+  if (!world.player) return;
 
   const w = world;
   const p = w.player;
@@ -777,23 +797,45 @@ function draw() {
     ctx.stroke();
   }
 
-  const psx = p.x - cam.x - TILE / 2;
-  const psy = p.y - cam.y - TILE / 2;
-  if (p.invuln > 0 && Math.floor(w.t * 20) % 2 === 0) ctx.globalAlpha = 0.5;
-  sprite('player', psx, psy);
-  ctx.globalAlpha = 1;
+  if (p) {
+    const psx = p.x - cam.x - TILE / 2;
+    const psy = p.y - cam.y - TILE / 2;
+    if (p.invuln > 0 && Math.floor(w.t * 20) % 2 === 0) ctx.globalAlpha = 0.5;
+    sprite('player', psx, psy);
+    ctx.globalAlpha = 1;
 
-  ctx.strokeStyle = 'rgba(255,220,160,0.8)';
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.moveTo(p.x - cam.x + Math.cos(p.aim) * 6, p.y - cam.y + Math.sin(p.aim) * 6);
-  ctx.lineTo(p.x - cam.x + Math.cos(p.aim) * 13, p.y - cam.y + Math.sin(p.aim) * 13);
-  ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,220,160,0.8)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(p.x - cam.x + Math.cos(p.aim) * 6, p.y - cam.y + Math.sin(p.aim) * 6);
+    ctx.lineTo(p.x - cam.x + Math.cos(p.aim) * 13, p.y - cam.y + Math.sin(p.aim) * 13);
+    ctx.stroke();
 
-  if (p.invuln > 0) {
-    ctx.strokeStyle = 'rgba(120,190,255,0.7)';
-    ctx.lineWidth = 1;
-    ctx.strokeRect(psx + 1, psy + 1, TILE - 2, TILE - 2);
+    if (p.invuln > 0) {
+      ctx.strokeStyle = 'rgba(120,190,255,0.7)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(psx + 1, psy + 1, TILE - 2, TILE - 2);
+    }
+  }
+
+  // 联机：队友用同一张贴图，加名字标签区分
+  if (NET.on && w.players && w.players.length > 1) {
+    for (const mate of w.players) {
+      if (!mate || mate === p || !mate.alive) continue;
+      const mx = mate.x - cam.x - TILE / 2;
+      const my = mate.y - cam.y - TILE / 2;
+      ctx.globalAlpha = mate.hitFlash > 0 ? 0.5 : 0.92;
+      sprite('player', mx, my);
+      ctx.globalAlpha = 1;
+      ctx.font = '8px "Microsoft YaHei", monospace';
+      ctx.textAlign = 'center';
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = 'rgba(0,0,0,0.8)';
+      ctx.strokeText(mate.name || '队友', mx + TILE / 2, my - 3);
+      ctx.fillStyle = '#9fe8ff';
+      ctx.fillText(mate.name || '队友', mx + TILE / 2, my - 3);
+      ctx.textAlign = 'left';
+    }
   }
 
   ctx.restore();
@@ -985,8 +1027,223 @@ function drawMinimap() {
 
   // 玩家
   const p = world.player;
+  if (!p) return;
   mctx.fillStyle = '#ffffff';
   mctx.fillRect(Math.floor(p.x / 16) * MM_SCALE - 1, Math.floor(p.y / 16) * MM_SCALE - 1, MM_SCALE + 2, MM_SCALE + 2);
+}
+
+/** 联机：输名字后连服务器 */
+function startNet() {
+  if (!world) return;
+  const name = (prompt('你的名字（最多 8 个字）', '勇者') || '').trim().slice(0, 8);
+  if (!name) return;
+  connectNet(name);
+  world.addLog('正在连接服务器…');
+  lastOverlayKey = '';
+}
+
+/* ---------------- 联机 ---------------- */
+
+const NET = {
+  on: false,
+  ws: null,
+  id: 0,
+  name: '',
+  me: null,
+  sendTimer: 0,
+  fovTimer: 0,
+};
+
+function netLog(msg) {
+  if (!world) return;
+  world.addLog(msg);
+}
+
+function connectNet(name) {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const url = `${proto}://${location.host}/ws`;
+  let ws;
+  try {
+    ws = new WebSocket(url);
+  } catch (err) {
+    alert('联机连接失败：' + err.message);
+    return;
+  }
+  NET.ws = ws;
+  NET.name = name;
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ t: 'join', name }));
+  };
+
+  ws.onmessage = (ev) => {
+    let msg;
+    try {
+      msg = JSON.parse(ev.data);
+    } catch (err) {
+      return;
+    }
+    handleNet(msg);
+  };
+
+  ws.onclose = () => {
+    NET.on = false;
+    NET.ws = null;
+    if (world) {
+      world.paused = true;
+      world.screen = 'title';
+      netLog('与服务器断开连接。');
+    }
+    lastOverlayKey = '';
+  };
+
+  ws.onerror = () => {
+    netLog('联机出错，请检查服务器是否在运行。');
+  };
+}
+
+function handleNet(msg) {
+  if (msg.t === 'welcome') {
+    NET.id = msg.id;
+    NET.on = true;
+    if (world) {
+      world.screen = 'playing';
+      world.paused = false;
+      netLog(`已加入房间（${msg.name}）。`);
+    }
+    lastOverlayKey = '';
+    return;
+  }
+  if (msg.t === 'map') {
+    applyNetMap(msg);
+    lastOverlayKey = '';
+    return;
+  }
+  if (msg.t === 'snap') {
+    applyNetSnap(msg);
+    return;
+  }
+  if (msg.t === 'evt') {
+    consumeEvents(msg.list || []);
+    return;
+  }
+  if (msg.t === 'sys') {
+    netLog(msg.msg);
+  }
+}
+
+/** 服务器发来的整层地图 */
+function applyNetMap(msg) {
+  const w = world;
+  w.mapW = msg.w;
+  w.mapH = msg.h;
+  w.tiles = msg.tiles.split('');
+  w.map = { tiles: w.tiles, w: msg.w, h: msg.h };
+  w.explored = new Uint8Array(w.mapW * w.mapH);
+  w.visible = new Uint8Array(w.mapW * w.mapH);
+  w.depth = msg.depth;
+  w.stairs = msg.stairs;
+  w.enemies = [];
+  w.items = [];
+  w.projectiles = [];
+  w.slashes = [];
+  w.blasts = [];
+  // 快照还没到之前保留本地那个 player 对象，避免渲染层拿到 undefined
+  const keepPlayer = w.player;
+  w.players = keepPlayer ? [keepPlayer] : [];
+  w.player = keepPlayer;
+  w.paused = false;
+  w.screen = 'playing';
+  floaters.length = 0;
+}
+
+/** 每帧的世界快照 */
+function applyNetSnap(msg) {
+  const w = world;
+  w.depth = msg.depth;
+  w.screen = msg.screen;
+  w.paused = msg.paused;
+  w.stairs = msg.stairs;
+  w.restPrompt = msg.restPrompt;
+  w.pending = msg.pending;
+  w.pendingKind = msg.pending ? 'levelup' : null;
+  w.pendingSkip = msg.pendingSkip;
+  w.shop = msg.shop;
+
+  // 玩家：按索引复用对象，避免每帧新建
+  msg.players.forEach((sp, i) => {
+    let p = w.players[i];
+    if (!p) {
+      p = w.makePlayer();
+      w.players[i] = p;
+    }
+    p.x = sp.x;
+    p.y = sp.y;
+    p.hp = sp.hp;
+    p.maxHp = sp.maxHp;
+    p.aim = sp.aim;
+    p.alive = sp.alive;
+    p.name = sp.name;
+    p.level = sp.level;
+    p.hitFlash = sp.flash ? 0.2 : 0;
+    p.moving = sp.moving;
+    p.invuln = 0;
+  });
+  w.players.length = msg.players.length;
+  w.player = w.players[NET.id] || w.players[0];
+  NET.me = msg.me || null;
+  if (msg.me && w.player) {
+    const keep = { x: w.player.x, y: w.player.y, aim: w.player.aim, name: w.player.name };
+    Object.assign(w.player, msg.me, keep);
+    w.player.weapon = Engine.WEAPONS[msg.me.weapon] || w.player.weapon;
+  }
+
+  w.enemies = msg.enemies.map((e, i) => ({
+    id: i,
+    x: e.x,
+    y: e.y,
+    type: e.type,
+    hp: e.hp,
+    maxHp: e.maxHp,
+    flash: e.flash ? 0.2 : 0,
+    boss: e.boss,
+    dead: false,
+    r: 6,
+  }));
+
+  w.items = msg.items.map((it, i) => ({ id: i, x: it.x, y: it.y, kind: it.kind, amount: it.amount }));
+  w.projectiles = msg.projectiles;
+  w.slashes = msg.slashes.map((s) => ({ ...s, life: 0.13, max: 0.13 }));
+  w.blasts = msg.blasts.map((b) => ({ ...b, life: 0.3, max: 0.3 }));
+  if (msg.log && msg.log.length) w.log = msg.log;
+}
+
+/** 联机时把输入按 20Hz 发给服务器 */
+function netSendInput(dt) {
+  if (!NET.on || !NET.ws || NET.ws.readyState !== 1) return;
+  NET.sendTimer -= dt;
+  if (NET.sendTimer > 0) return;
+  NET.sendTimer = 0.05;
+  const input = buildInput();
+  NET.ws.send(
+    JSON.stringify({
+      t: 'input',
+      up: input.up,
+      down: input.down,
+      left: input.left,
+      right: input.right,
+      firing: input.firing,
+      aimX: Math.round(input.aimX),
+      aimY: Math.round(input.aimY),
+    }),
+  );
+}
+
+/** 联机操作统一走服务器 */
+function netAct(a, extra) {
+  if (!NET.on || !NET.ws || NET.ws.readyState !== 1) return false;
+  NET.ws.send(JSON.stringify({ t: 'act', a, ...(extra || {}) }));
+  return true;
 }
 
 function escapeHtml(s) {
@@ -1081,10 +1338,14 @@ function titleHtml() {
       <p class="sub">零依赖 · 离线 · 实时动作 · 随机地牢</p>
       <div class="crystal-big">晶石 <b>${meta.crystals}</b></div>
       ${upgradePanel()}
-      <button class="start" data-act="start">开始冒险</button>
+      <div class="rest-actions">
+        <button class="start" data-act="start">单机冒险</button>
+        <button class="start ghost" data-act="net">联机同屏</button>
+      </div>
       <p class="hint">
         WASD 移动 · 鼠标瞄准 · 按住左键攻击 · Q 喝药 · M 静音<br>
-        已冒险 ${meta.runs} 次 · 最深抵达第 ${meta.best.floor || 0} 层
+        已冒险 ${meta.runs} 次 · 最深抵达第 ${meta.best.floor || 0} 层<br>
+        联机：最多 4 人进同一座地牢，共享地图与掉落
       </p>
     </div>`;
 }
@@ -1199,10 +1460,17 @@ overlay.addEventListener('click', (ev) => {
   if (!btn) return;
   const act = btn.dataset.act;
   if (act === 'start') startRun();
+  else if (act === 'net') startNet();
   else if (act === 'upgrade') buyUpgrade(btn.dataset.stat);
-  else if (act === 'choose') world.resolveChoice(Number(btn.dataset.index));
-  else if (act === 'skip') world.skipPending();
-  else if (act === 'buy') world.buyShop(Number(btn.dataset.index));
+  else if (act === 'choose') {
+    if (!netAct('choose', { i: Number(btn.dataset.index) })) world.resolveChoice(Number(btn.dataset.index));
+  }
+  else if (act === 'skip') {
+    if (!netAct('skip')) world.skipPending();
+  }
+  else if (act === 'buy') {
+    if (!netAct('buy', { i: Number(btn.dataset.index) })) world.buyShop(Number(btn.dataset.index));
+  }
   else if (act === 'continue') world.continueRun();
   else if (act === 'retire') world.endRun();
   else if (act === 'leave') world.closeShop();

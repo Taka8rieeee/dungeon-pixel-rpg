@@ -149,6 +149,41 @@ const server = http.createServer((req, res) => {
   }
 });
 
+/* ---------------- 联机：WebSocket ---------------- */
+
+const net = require('./net/ws');
+let lobby = null;
+try {
+  lobby = require('./net/room');
+} catch (err) {
+  console.warn('联机模块加载失败（单机模式照常可用）：', err.message);
+}
+
+if (lobby) {
+  net.attach(server, (conn) => {
+    conn.on('message', (raw) => {
+      let msg;
+      try {
+        msg = JSON.parse(raw);
+      } catch (err) {
+        return;
+      }
+      const room = conn.data.room;
+      if (msg.t === 'join') {
+        if (room) return;
+        const name = String(msg.name || '').slice(0, 8).trim() || '无名氏';
+        lobby.joinAny(conn, name);
+        return;
+      }
+      if (room) room.handle(conn, msg);
+    });
+    conn.on('close', () => {
+      const room = conn.data.room;
+      if (room) room.leave(conn);
+    });
+  }, { path: '/ws' });
+}
+
 function listen(port, attempt = 0) {
   server.once('error', (err) => {
     if (err.code === 'EADDRINUSE' && attempt < 10) {
@@ -158,13 +193,24 @@ function listen(port, attempt = 0) {
       process.exit(1);
     }
   });
-  server.listen(port, '127.0.0.1', () => {
+  // 默认监听所有网卡：同一 Wi-Fi 下手机才能连进来；只想本机玩可设 HOST=127.0.0.1
+  server.listen(port, process.env.HOST || '0.0.0.0', () => {
     // PORT=0 时由系统随机分配，以实际绑定的端口为准
     const actual = server.address().port;
     const url = `http://localhost:${actual}`;
     console.log('');
     console.log('  地牢像素 RPG（实时版）已启动');
-    console.log(`  浏览器打开：${url}`);
+    console.log(`  本机打开：${url}`);
+    // 打印局域网地址，方便手机扫码/手输
+    const os = require('os');
+    const nets = os.networkInterfaces();
+    for (const name of Object.keys(nets)) {
+      for (const ni of nets[name] || []) {
+        if (ni.family === 'IPv4' && !ni.internal) {
+          console.log(`  局域网：http://${ni.address}:${actual}   （手机连同一个 Wi-Fi 用这个）`);
+        }
+      }
+    }
     console.log('  按 Ctrl+C 停止');
     console.log('');
     if (process.platform === 'win32' && !process.env.NO_OPEN) {

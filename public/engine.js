@@ -182,6 +182,8 @@
   const META_MAX = 5;
 
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
+  /** 缺省输入：联机时某个玩家这一帧没上报就用它 */
+  const EMPTY_INPUT = { up: false, down: false, left: false, right: false, firing: false, aimX: 0, aimY: 0 };
   const dist2 = (ax, ay, bx, by) => (ax - bx) * (ax - bx) + (ay - by) * (ay - by);
 
   function angleDelta(a, b) {
@@ -235,7 +237,17 @@
       this.t = 0;
       this.runStats = { kills: 0, gold: 0, crystals: 0 };
 
-      this.player = {
+      this.player = this.makePlayer();
+      this.players = [this.player];
+      this.pendings = [null];
+
+      this.enterFloor(1);
+      this.addLog('你只摸到一根旧木棒，往里走吧。');
+    }
+
+    /** 造一个玩家状态（单机只有 0 号，联机时每个连接一个） */
+    makePlayer() {
+      const p = {
         x: 0,
         y: 0,
         hw: 5,
@@ -269,11 +281,52 @@
         hitFlash: 0,
         moving: false,
         regenPool: 0,
+        name: '',
+        alive: true,
       };
-      this.player.hp = this.player.maxHp;
+      p.hp = p.maxHp;
+      return p;
+    }
 
-      this.enterFloor(1);
-      this.addLog('你只摸到一根旧木棒，往里走吧。');
+    /** 联机：新玩家加入，出生在房主附近 */
+    addPlayer(name) {
+      const p = this.makePlayer();
+      p.name = name || `队友${this.players.length}`;
+      const lead = this.player;
+      const spot = this.findFreeSpot(lead.x + 20, lead.y, 8, 5);
+      p.x = spot.x;
+      p.y = spot.y;
+      this.players.push(p);
+      this.pendings.push(null);
+      this.addLog(`${p.name} 加入了队伍。`);
+      this.emit({ type: 'join', name: p.name });
+      return p;
+    }
+
+    /** 离开：0 号是房主，其余直接从数组里摘掉 */
+    removePlayer(p) {
+      const i = this.players.indexOf(p);
+      if (i <= 0) return false;
+      this.players.splice(i, 1);
+      this.pendings.splice(i, 1);
+      this.addLog(`${p.name || '队友'} 离开了。`);
+      this.emit({ type: 'leave', name: p.name || '队友' });
+      return true;
+    }
+
+    /** 离某个敌人最近的活着的玩家 */
+    nearestPlayer(x, y) {
+      let best = this.player;
+      let bestD = Infinity;
+      for (const p of this.players) {
+        if (!p.alive) continue;
+        const d = dist2(x, y, p.x, p.y);
+        if (d < bestD) {
+          bestD = d;
+          best = p;
+        }
+      }
+      return best;
     }
 
     enterFloor(depth) {
@@ -298,14 +351,19 @@
       // 刚进新层给玩家一点喘息时间，避免落地即被围
       this.calmTimer = 2;
 
-      const p = this.player;
-      p.x = (f.start.x + 0.5) * TILE;
-      p.y = (f.start.y + 0.5) * TILE;
-      p.cd = 0;
-      p.invuln = 1;
-      p.hitFlash = 0;
+      // 所有玩家一起落到出生点（联机时略微错开，避免叠在一起）
+      this.players.forEach((p, i) => {
+        p.x = (f.start.x + 0.5) * TILE + (i > 0 ? 14 : 0);
+        p.y = (f.start.y + 0.5) * TILE + (i > 0 ? (i % 2 ? 10 : -10) : 0);
+        p.cd = 0;
+        p.invuln = 1;
+        p.hitFlash = 0;
+        p.alive = true;
+        if (!p.hp || p.hp <= 0) p.hp = Math.ceil(p.maxHp * 0.5);
+      });
 
       if (depth > 1) {
+        const p = this.player;
         const heal = Math.round(p.maxHp * 0.2);
         if (p.hp < p.maxHp) {
           const before = p.hp;
@@ -638,8 +696,8 @@
       }
     }
 
-    playerTile() {
-      return { x: Math.floor(this.player.x / TILE), y: Math.floor(this.player.y / TILE) };
+    playerTile(p = this.player) {
+      return { x: Math.floor(p.x / TILE), y: Math.floor(p.y / TILE) };
     }
 
     /* ---------------- 主循环 ---------------- */
@@ -650,7 +708,13 @@
       this.t += dt;
       if (this.calmTimer > 0) this.calmTimer = Math.max(0, this.calmTimer - dt);
 
-      this.updatePlayer(dt, input);
+      // 单机传单个 input，联机传与 players 对齐的数组
+      const inputs = Array.isArray(input) ? input : [input];
+      for (let i = 0; i < this.players.length; i++) {
+        const p = this.players[i];
+        if (!p.alive) continue;
+        this.updatePlayer(p, dt, inputs[i] || EMPTY_INPUT);
+      }
 
       this.flowTimer -= dt;
       if (this.flowTimer <= 0) {
@@ -671,9 +735,7 @@
       }
     }
 
-    updatePlayer(dt, input) {
-      const p = this.player;
-
+    updatePlayer(p, dt, input) {
       let dx = 0;
       let dy = 0;
       if (input.left) dx -= 1;
@@ -689,7 +751,7 @@
       p.aim = Math.atan2(input.aimY - p.y, input.aimX - p.x);
 
       if (p.cd > 0) p.cd -= dt;
-      if (input.firing && p.cd <= 0) this.playerAttack();
+      if (input.firing && p.cd <= 0) this.playerAttack(p);
 
       if (p.invuln > 0) p.invuln -= dt;
       if (p.hitFlash > 0) p.hitFlash -= dt;
@@ -748,8 +810,7 @@
       return true;
     }
 
-    playerAttack() {
-      const p = this.player;
+    playerAttack(p = this.player) {
       const w = p.weapon;
       // 匕首的狂热：命中越多出手越快
       const frenzyScale = w.trait === 'frenzy' ? 1 / (1 + p.frenzy) : 1;
@@ -780,7 +841,7 @@
           if (d > reach + e.r) continue;
           const ang = Math.atan2(e.y - p.y, e.x - p.x);
           if (angleDelta(ang, p.aim) > w.arc / 2) continue;
-          this.damageEnemy(e, mult, w);
+          this.damageEnemy(e, mult, w, p);
           hitAny = true;
         }
         this.slashes.push({
@@ -805,6 +866,7 @@
           life: w.life,
           mult,
           from: 'player',
+          owner: p,
           r: 3,
           pierce: w.pierce || 0,
           hitIds: [],
@@ -814,8 +876,8 @@
     }
 
     /** 切换已拥有的武器 */
-    switchWeapon(index) {
-      const p = this.player;
+    switchWeapon(index, who) {
+      const p = who || this.player;
       const i = Number(index);
       if (!Number.isInteger(i) || i < 0 || i >= p.weapons.length) return false;
       if (i === p.weaponIndex) return false;
@@ -830,12 +892,12 @@
     }
 
     /** 滚轮循环切换 */
-    cycleWeapon(step) {
-      const p = this.player;
+    cycleWeapon(step, who) {
+      const p = who || this.player;
       if (p.weapons.length < 2) return false;
       const n = p.weapons.length;
       const next = (p.weaponIndex + (step > 0 ? 1 : -1) + n) % n;
-      return this.switchWeapon(next);
+      return this.switchWeapon(next, p);
     }
 
     /**
@@ -844,8 +906,8 @@
      *   2. 还有空位 → 放入空位
      *   3. 两格都满 → 顶掉当前手持的那把，旧武器掉在地上，随时能捡回来
      */
-    gainWeapon(id) {
-      const p = this.player;
+    gainWeapon(id, who) {
+      const p = who || this.player;
       const w = WEAPONS[id];
       if (!w || id === 'starter' || p.weapons.includes(id)) return false;
 
@@ -888,8 +950,8 @@
     }
 
     /** 捡起脚边掉落的武器 */
-    pickupWeaponNearby() {
-      const p = this.player;
+    pickupWeaponNearby(who) {
+      const p = who || this.player;
       let best = null;
       let bestD = 30 * 30;
       for (const it of this.items) {
@@ -905,8 +967,8 @@
       return true;
     }
 
-    takeGroundWeapon(item) {
-      const p = this.player;
+    takeGroundWeapon(item, who) {
+      const p = who || this.player;
       const id = item.weaponId;
       const w = WEAPONS[id];
       if (!w) return;
@@ -960,8 +1022,8 @@
       return false;
     }
 
-    damageEnemy(e, mult, weapon) {
-      const p = this.player;
+    damageEnemy(e, mult, weapon, attacker) {
+      const p = attacker || this.player;
       const w = weapon || p.weapon;
       // 速灵：有概率闪掉这一下
       if (e.dodge && this.rng.chance(e.dodge)) {
@@ -996,14 +1058,18 @@
       if (heal > 0) p.hp = Math.min(p.maxHp, p.hp + heal);
 
       this.emit({ type: 'hit', x: e.x, y: e.y, dmg, crit, heal });
-      if (e.hp <= 0) this.killEnemy(e);
+      if (e.hp <= 0) {
+        e.lastHitBy = p;
+        this.killEnemy(e);
+      }
     }
 
     killEnemy(e) {
       if (e.dead) return;
       e.dead = true;
       this.runStats.kills++;
-      this.player.xp += e.xp;
+      // 经验共享：每个活着的玩家都拿一份，各升各的级
+      for (const p of this.players) if (p.alive) p.xp += e.xp;
       this.emit({ type: 'kill', x: e.x, y: e.y, name: e.name, boss: e.boss, final: e.summon });
 
       // 尸体上掉一把金币：杀怪是金币的主要来源
@@ -1021,20 +1087,22 @@
 
         this.stairs.locked = false;
         this.addLog('楼梯的封印解除了。');
-        const heal = Math.round(this.player.maxHp * 0.25);
-        if (this.player.hp < this.player.maxHp) {
-          const before = this.player.hp;
-          this.player.hp = Math.min(this.player.maxHp, this.player.hp + heal);
-          this.addLog(`层主的精华治愈了你（+${this.player.hp - before} 生命）。`);
+        for (const p of this.players) {
+          if (!p.alive) continue;
+          const heal = Math.round(p.maxHp * 0.25);
+          if (p.hp < p.maxHp) p.hp = Math.min(p.maxHp, p.hp + heal);
         }
       }
 
-      while (this.player.xp >= this.player.xpNext) {
-        this.player.xp -= this.player.xpNext;
-        this.player.level++;
-        this.player.xpNext = Math.round(this.player.xpNext * 1.3) + 6;
-        this.pendingLevels++;
-        this.emit({ type: 'levelup', level: this.player.level });
+      for (const p of this.players) {
+        if (!p.alive) continue;
+        while (p.xp >= p.xpNext) {
+          p.xp -= p.xpNext;
+          p.level++;
+          p.xpNext = Math.round(p.xpNext * 1.3) + 6;
+          this.pendingLevels++;
+          this.emit({ type: 'levelup', level: p.level, who: p.name || '' });
+        }
       }
       if (this.pendingLevels > 0 && !this.pending) this.rollChoices();
     }
@@ -1051,18 +1119,20 @@
       const pick = this.pending[index];
       if (!pick) return;
       const p = this.player;
+      // 联机：整个队伍共用一次选择，效果同时加给所有人
+      const targets = this.players.length > 1 ? this.players.filter((q) => q.alive) : [p];
 
       if (pick.kind === 'weapon') {
         this.gainWeapon(pick.id);
         this.emit({ type: 'upgrade', id: pick.id });
       } else if (pick.kind === 'buff') {
         const buff = BUFFS.find((b) => b.id === pick.id);
-        if (buff) buff.apply(p);
+        if (buff) targets.forEach((q) => buff.apply(q));
         this.addLog(`获得「${pick.name}」：${pick.desc}`);
         this.emit({ type: 'upgrade', id: pick.id });
       } else {
         const up = UPGRADE_POOL.find((u) => u.id === pick.id);
-        if (up) up.apply(p);
+        if (up) targets.forEach((q) => up.apply(q));
         this.addLog(`选择强化：${up.name} —— ${up.desc}`);
         this.emit({ type: 'upgrade', id: pick.id });
         this.pendingLevels--;
@@ -1088,14 +1158,17 @@
      * 敌人不在视线内时沿这个场下坡走，就能自动绕过拐角和墙，而不是贴着墙原地顶。
      */
     updateFlow() {
+      // 每个玩家一份距离场：敌人追谁就走谁的那张
+      this.flows = this.players.map((p) => this.buildFlow(p));
+      this.flow = this.flows[0];
+    }
+
+    buildFlow(forPlayer) {
       const W = this.mapW;
       const H = this.mapH;
       const dist = new Int16Array(W * H).fill(-1);
-      const pt = this.playerTile();
-      if (pt.x < 0 || pt.y < 0 || pt.x >= W || pt.y >= H) {
-        this.flow = dist;
-        return;
-      }
+      const pt = this.playerTile(forPlayer);
+      if (pt.x < 0 || pt.y < 0 || pt.x >= W || pt.y >= H) return dist;
       const start = pt.y * W + pt.x;
       dist[start] = 0;
       const queue = [start];
@@ -1113,22 +1186,25 @@
           queue.push(j);
         }
       }
-      this.flow = dist;
+      return dist;
     }
 
     /** 沿距离场往玩家方向下坡，返回单位方向向量 */
     flowDir(e) {
       const W = this.mapW;
+      const target = e.target || this.player;
+      const ti = this.players.indexOf(target);
+      const flow = (this.flows && this.flows[ti >= 0 ? ti : 0]) || this.flow;
       const tx = Math.floor(e.x / TILE);
       const ty = Math.floor(e.y / TILE);
       const fallback = () => {
-        const dx = this.player.x - e.x;
-        const dy = this.player.y - e.y;
+        const dx = target.x - e.x;
+        const dy = target.y - e.y;
         const d = Math.hypot(dx, dy) || 1;
         return { x: dx / d, y: dy / d };
       };
-      if (!this.flow || tx < 0 || ty < 0 || tx >= W || ty >= this.mapH) return fallback();
-      const cur = this.flow[ty * W + tx];
+      if (!flow || tx < 0 || ty < 0 || tx >= W || ty >= this.mapH) return fallback();
+      const cur = flow[ty * W + tx];
       if (cur < 0) return fallback();
 
       let bestX = -1;
@@ -1138,7 +1214,7 @@
         const nx = tx + dx;
         const ny = ty + dy;
         if (nx < 0 || ny < 0 || nx >= W || ny >= this.mapH) continue;
-        const v = this.flow[ny * W + nx];
+        const v = flow[ny * W + nx];
         if (v < 0 || v >= bestD) continue;
         bestD = v;
         bestX = nx;
@@ -1155,7 +1231,6 @@
     }
 
     updateEnemies(dt) {
-      const p = this.player;
       const alive = [];
       for (const e of this.enemies) {
         if (!e.dead) alive.push(e);
@@ -1168,6 +1243,9 @@
         if (e.cd > 0) e.cd -= dt;
         if (e.slowTimer > 0) e.slowTimer -= dt;
 
+        // 联机：每个敌人盯住离自己最近的活人
+        const p = this.nearestPlayer(e.x, e.y);
+        e.target = p;
         const dx = p.x - e.x;
         const dy = p.y - e.y;
         const d = Math.hypot(dx, dy) || 1;
@@ -1273,7 +1351,7 @@
             e.dirY = 0;
             if (e.cd <= 0) {
               e.cd = e.attackCd;
-              this.hurtPlayer(e.atk, e);
+              this.hurtPlayer(e.atk, e, p);
             }
           }
         }
@@ -1352,8 +1430,9 @@
       }
     }
 
-    hurtPlayer(dmg, from) {
-      const p = this.player;
+    hurtPlayer(dmg, from, target) {
+      const p = target || this.player;
+      if (!p || !p.alive) return;
       if (p.invuln > 0) return;
       const raw = dmg * (0.9 + this.rng.float() * 0.2);
       const real = Math.max(1, Math.round(raw - p.def * 0.5));
@@ -1366,11 +1445,11 @@
         this.moveBody(p, Math.cos(ang) * from.knockPlayer, Math.sin(ang) * from.knockPlayer);
       }
       this.emit({ type: 'playerHit', dmg: real, x: p.x, y: p.y, from: from ? from.type : 'unknown' });
-      if (p.hp <= 0) this.handleDeath();
+      if (p.hp <= 0) this.handleDeath(p);
     }
 
-    handleDeath() {
-      const p = this.player;
+    handleDeath(target) {
+      const p = target || this.player;
       if (p.revive > 0) {
         p.revive--;
         p.hp = Math.ceil(p.maxHp * 0.5);
@@ -1380,6 +1459,16 @@
         return;
       }
       p.hp = 0;
+      p.alive = false;
+
+      // 联机：还有队友活着就只是倒下，等下一层重新站起来
+      const others = this.players.filter((q) => q !== p && q.alive);
+      if (this.players.length > 1 && others.length > 0) {
+        this.addLog(`${p.name || '队友'} 倒下了，等下一位队友带你走。`);
+        this.emit({ type: 'playerDown', x: p.x, y: p.y, name: p.name });
+        return;
+      }
+
       this.screen = 'dead';
       this.deathInfo = { floor: this.depth, kills: this.runStats.kills, gold: this.runStats.gold, crystals: this.runStats.crystals };
       this.meta.best.floor = Math.max(this.meta.best.floor || 0, this.depth);
@@ -1437,7 +1526,7 @@
               }
             }
             if (hit) {
-              this.damageEnemy(hit, pr.mult, pr.weapon);
+              this.damageEnemy(hit, pr.mult, pr.weapon, pr.owner);
               if (pr.pierce > 0) {
                 // 穿透箭：继续飞，但不再打同一个目标
                 pr.pierce--;
@@ -1496,7 +1585,6 @@
     }
 
     updateItems() {
-      const p = this.player;
       const keep = [];
       for (const it of this.items) {
         // 掉在地上的武器要按 E 主动捡，不自动拾取，避免来回换
@@ -1504,6 +1592,8 @@
           keep.push(it);
           continue;
         }
+        // 谁能捡就算谁的：取离物品最近的活人
+        const p = this.nearestPlayer(it.x, it.y);
         const d2 = dist2(it.x, it.y, p.x, p.y);
         // 宝箱与商店：踩上去触发，但都不会因此消失，
         // 必须走开一段再回来才会重新触发，否则站在上面会每帧弹窗。
@@ -1525,13 +1615,13 @@
         }
         // 拾取失败（比如药水已满）就留在原地。绝不能在这里改 this.items：
         // 正在遍历的数组被 push 会让迭代器原地打转，数组无限增长到 Invalid array length
-        if (!this.pickup(it)) keep.push(it);
+        if (!this.pickup(it, p)) keep.push(it);
       }
       this.items = keep;
     }
 
-    pickup(item) {
-      const p = this.player;
+    pickup(item, who) {
+      const p = who || this.player;
       if (item.kind === 'gold') {
         p.gold += item.amount;
         this.runStats.gold += item.amount;
@@ -1701,12 +1791,12 @@
     }
 
     /** 买下货架上的第 index 件商品，返回是否成交 */
-    buyShop(index) {
+    buyShop(index, who) {
       const shop = this.shop;
       if (!shop) return false;
       const it = shop.stock[index];
       if (!it || it.sold) return false;
-      const p = this.player;
+      const p = who || this.player;
 
       // 武器可能在开箱/捡地上武器时已经拿到手了，撤下但不扣钱
       if (it.kind === 'weapon' && p.weapons.includes(it.id)) {
@@ -1742,8 +1832,8 @@
       this.paused = false;
     }
 
-    usePotion() {
-      const p = this.player;
+    usePotion(who) {
+      const p = who || this.player;
       if (p.potion <= 0) {
         this.addLog('没有药水了。');
         return;

@@ -1171,11 +1171,75 @@ test('疾风之石：攻击速度增益会缩短冷却', () => {
   assert.ok(before / w.player.cdScale < 1.15, `单件攻速加成不应过高（${(before / w.player.cdScale).toFixed(3)}x）`);
 });
 
+/* ---------------- 联机（多玩家） ---------------- */
+
+test('多人：addPlayer 后两个玩家都在场且互不重叠', () => {
+  const w = newWorld(18000);
+  const p2 = w.addPlayer('队友A');
+  assert.strictEqual(w.players.length, 2);
+  assert.strictEqual(w.players[0], w.player, '0 号仍是房主');
+  assert.ok(Math.hypot(p2.x - w.player.x, p2.y - w.player.y) > 8, '出生点应与房主错开');
+  assert.ok(!w.blocked(p2.x, p2.y, p2.hw, p2.hh), '不能出生在墙里');
+});
+
+test('多人：两个玩家各自移动、各自受伤', () => {
+  const w = newWorld(18010);
+  const p2 = w.addPlayer('队友A');
+  const x0 = w.player.x;
+  const x1 = p2.x;
+  const inp = { up: false, down: false, left: false, right: true, firing: false, aimX: 0, aimY: 0 };
+  for (let i = 0; i < 20; i++) w.tick(0.016, [inp, { ...inp, right: false, left: true }]);
+  assert.ok(w.player.x !== x0, '房主应移动');
+  assert.ok(p2.x !== x1, '队友应独立移动');
+
+  const hp0 = w.player.hp;
+  const hp1 = p2.hp;
+  w.hurtPlayer(10, { type: 'slime' }, p2);
+  assert.strictEqual(w.player.hp, hp0, '打队友不该掉房主的血');
+  assert.ok(p2.hp < hp1, '队友应该掉血');
+});
+
+test('多人：经验共享，每个活着的玩家都涨经验', () => {
+  const w = newWorld(18020);
+  const p2 = w.addPlayer('队友A');
+  const e = w.spawnEnemy('slime', w.player.x + 30, w.player.y);
+  const xp0 = w.player.xp;
+  const xp1 = p2.xp;
+  w.killEnemy(e);
+  assert.strictEqual(w.player.xp - xp0, e.xp, '房主应拿到经验');
+  assert.strictEqual(p2.xp - xp1, e.xp, '队友也应拿到同样经验');
+});
+
+test('多人：敌人盯最近的那个玩家', () => {
+  const w = newWorld(18030);
+  const p2 = w.addPlayer('队友A');
+  // 把队友挪到远处，敌人放在队友旁边
+  p2.x = w.player.x + 200;
+  p2.y = w.player.y;
+  const e = w.spawnEnemy('slime', p2.x + 10, p2.y);
+  for (let i = 0; i < 10; i++) w.tick(0.016, [null, null]);
+  assert.strictEqual(e.target, p2, '应锁定更近的队友');
+});
+
+test('多人：一名玩家倒下不会结束游戏，全灭才结束', () => {
+  const w = newWorld(18040);
+  const p2 = w.addPlayer('队友A');
+  w.handleDeath(p2);
+  assert.strictEqual(p2.alive, false, '队友应倒下');
+  assert.strictEqual(w.screen, 'playing', '还有队友活着，游戏继续');
+
+  w.player.hp = 1;
+  w.player.invuln = 0; // 出生有 1 秒无敌帧
+  w.hurtPlayer(999, { type: 'brute' }, w.player);
+  assert.strictEqual(w.screen, 'dead', '全灭才结算');
+});
+
 console.log('实时引擎测试：');
 let failed = 0;
 for (const [mark, name] of results) {
   if (mark === '✘') failed++;
   console.log(`  ${mark} ${name}`);
 }
+
 console.log(failed === 0 ? '全部通过 ✔' : `${failed} 项失败 ✘`);
 process.exit(failed === 0 ? 0 : 1);
