@@ -48,7 +48,16 @@ function main() {
   console.log('  复制游戏本体…');
   fs.writeFileSync(
     path.join(APP, 'package.json'),
-    JSON.stringify({ name: 'dungeon-pixel-rpg', version: '0.2.0', main: 'main.js' }, null, 2),
+    JSON.stringify(
+      {
+        name: 'dungeon-pixel-rpg',
+        // 从根 package.json 读，避免每次发版漏改这里
+        version: JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8')).version,
+        main: 'main.js',
+      },
+      null,
+      2,
+    ),
   );
   fs.copyFileSync(path.join(ROOT, 'electron', 'main.js'), path.join(APP, 'main.js'));
   fs.copyFileSync(path.join(ROOT, 'server.js'), path.join(APP, 'server.js'));
