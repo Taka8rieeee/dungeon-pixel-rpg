@@ -2,7 +2,7 @@
 
 /**
  * 打包服务端部署包（零依赖，解压即跑）：
- *   release/地牢像素RPG-服务端/
+ *   release/DungeonPixelRPG-server/
  *     server.js  package.json
  *     src/  public/  net/
  *     docs/deploy.md
@@ -15,7 +15,7 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
-const OUT = path.join(ROOT, 'release', '地牢像素RPG-服务端');
+const OUT = path.join(ROOT, 'release', 'DungeonPixelRPG-server'); // 英文目录名：Linux 解压中文名会乱码
 
 function copyDir(src, dest) {
   fs.mkdirSync(dest, { recursive: true });
