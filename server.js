@@ -70,6 +70,29 @@ async function handleApi(req, res, pathname) {
       return sendJson(res, 200, meta);
     }
 
+    // 联机地址：告诉玩家「让别人填什么」。
+    // Electron 版端口是随机分配的，界面不显示的话主机根本没法把地址报给朋友。
+    if (req.method === 'GET' && pathname === '/api/info') {
+      const port = server.address() ? server.address().port : 0;
+      const os = require('os');
+      const lan = [];
+      const nets = os.networkInterfaces();
+      for (const name of Object.keys(nets)) {
+        for (const ni of nets[name] || []) {
+          // 跳过回环、链路本地(169.254)和常见的虚拟网卡
+          if (ni.family !== 'IPv4' || ni.internal) continue;
+          if (/^169\.254\./.test(ni.address)) continue;
+          if (/vEthernet|VMware|VirtualBox|Loopback|WSL/i.test(name)) continue;
+          lan.push(ni.address);
+        }
+      }
+      return sendJson(res, 200, {
+        port,
+        lan,
+        lanList: lan.map((ip) => `${ip}:${port}`),
+      });
+    }
+
     if (req.method !== 'POST') return sendJson(res, 405, { error: '只支持 POST' });
 
     const body = await readBody(req);

@@ -35,6 +35,14 @@
         <p class="net-hint">输入名字，最多 4 人一起下地牢</p>
         <input id="netName" type="text" maxlength="8" placeholder="你的名字" value="勇者" />
         <input id="netServer" type="text" placeholder="服务器地址（留空＝当前这台的服务器）" />
+        <div id="netAddrBox" class="hidden">
+          <span class="net-addr-label">让队友把服务器地址填成这个：</span>
+          <div class="net-addr-row">
+            <code id="netAddr"></code>
+            <button type="button" id="netCopy">复制</button>
+          </div>
+          <span class="net-addr-tip" id="netAddrTip"></span>
+        </div>
         <div class="net-actions">
           <button type="submit" class="net-primary">进入地牢</button>
           <button type="button" id="netCancel">取消</button>

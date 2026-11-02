@@ -34,7 +34,9 @@ function startServer() {
       // 注意：不要碰 ELECTRON_RUN_AS_NODE —— fork 会自动把它设成 1，
       // 让子进程以纯 Node 模式跑 server.js；手动覆盖会让子进程又变成一个 GUI 实例
       // stdio 必须显式带 ipc（fork 依赖它），管道用于解析服务器实际监听的端口
-      env: { ...process.env, NO_OPEN: '1', PORT: '0' },
+      // 端口固定从 4321 起（占用则顺延，见 server.js 的 listen），
+      // 这样别人要填的联机地址基本是稳定的，不用每次重新问
+      env: { ...process.env, NO_OPEN: '1', PORT: '4321' },
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
     });
 

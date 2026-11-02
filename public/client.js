@@ -1038,9 +1038,35 @@ function startNet() {
   const dlg = document.getElementById('netDialog');
   if (!dlg) return;
   dlg.classList.remove('hidden');
+  loadNetAddr();
   const nameEl = document.getElementById('netName');
   nameEl.focus();
   nameEl.select();
+}
+
+/** 显示「让别人填这个」的联机地址；拿不到就提示怎么查 */
+async function loadNetAddr() {
+  const box = document.getElementById('netAddrBox');
+  const code = document.getElementById('netAddr');
+  const tip = document.getElementById('netAddrTip');
+  try {
+    const info = await fetch('/api/info', { cache: 'no-store' }).then((r) => r.json());
+    const addr = (info.lanList && info.lanList[0]) || '';
+    if (addr) {
+      box.classList.remove('hidden');
+      code.textContent = addr;
+      code.dataset.addr = addr;
+      tip.textContent = '同一 Wi-Fi 下的朋友填这个；外网朋友要先做端口映射或用公网服';
+    } else if (info.port) {
+      // 只有回环地址（没连网/只有虚拟网卡）
+      box.classList.remove('hidden');
+      code.textContent = `localhost:${info.port}`;
+      code.dataset.addr = `localhost:${info.port}`;
+      tip.textContent = '没检测到局域网 IP：先连上 Wi-Fi 或有线网再试';
+    }
+  } catch (err) {
+    box.classList.add('hidden');
+  }
 }
 
 function closeNetDialog() {
@@ -1513,6 +1539,29 @@ document.getElementById('netForm').addEventListener('submit', (ev) => {
 });
 
 document.getElementById('netCancel').addEventListener('click', closeNetDialog);
+
+/* 复制联机地址：优先 Clipboard API，失败退回选中文本让用户手抄 */
+document.getElementById('netCopy').addEventListener('click', async () => {
+  const el = document.getElementById('netAddr');
+  const text = el.dataset.addr || el.textContent || '';
+  if (!text) return;
+  const btn = document.getElementById('netCopy');
+  try {
+    await navigator.clipboard.writeText(text);
+    btn.textContent = '已复制';
+  } catch (err) {
+    // Electron 里 file:// 或权限受限时走这里
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    btn.textContent = '已选中，Ctrl+C';
+  }
+  setTimeout(() => {
+    btn.textContent = '复制';
+  }, 1600);
+});
 
 document.getElementById('netServer').addEventListener('keydown', (ev) => {
   if (ev.key === 'Escape') closeNetDialog();
