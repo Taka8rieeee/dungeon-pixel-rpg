@@ -38,6 +38,11 @@ function connect(name) {
       sock.write(Buffer.concat([header, mask, masked]));
     };
     state.send = send;
+    state.close = () => {
+      try {
+        sock.destroy();
+      } catch (e) { /* 忽略 */ }
+    };
 
     sock.on('connect', () => {
       sock.write(
@@ -168,6 +173,45 @@ function check(ok, label) {
   b.send({ t: 'act', a: 'potion' });
   await sleep(200);
   check(true, '操作消息没有导致服务端崩溃');
+
+  // 有人退出后，剩下的人必须还能正常玩（下标会前移，客户端要靠稳定 id 认自己）
+  const c = await connect('阿丙');
+  c.send({ t: 'join', name: '阿丙' });
+  await sleep(400);
+  const s3p = a.snaps[a.snaps.length - 1];
+  check(s3p && s3p.players.length === 3, `三人同场（实际 ${s3p ? s3p.players.length : 0}）`);
+
+  b.close(); // 中间那个人退出
+  await sleep(500);
+  const s4 = a.snaps[a.snaps.length - 1];
+  check(s4 && s4.players.length === 2, `退出后场上剩 2 人（实际 ${s4 ? s4.players.length : 0}）`);
+  check(s4 && s4.players.every((p) => p.id > 0), '每个玩家都带稳定 id');
+
+  const cPos = s4.players.find((p) => p.id === c.welcome.id);
+  check(!!cPos, '留下的玩家仍能在快照里找到自己');
+  if (cPos) {
+    for (let i = 0; i < 12; i++) {
+      c.send({ t: 'input', up: false, down: false, left: true, right: false, firing: false, aimX: 0, aimY: 0 });
+      await sleep(50);
+    }
+    const after = a.snaps[a.snaps.length - 1].players.find((p) => p.id === c.welcome.id);
+    check(!!after && after.x !== cPos.x, `队友退出后剩下的人仍能移动（${cPos.x} → ${after ? after.x : '?'}）`);
+  }
+
+  // 房主（0 号）退出，剩下的人要被提升为 0 号并继续可玩
+  a.close();
+  await sleep(600);
+  const s5 = c.snaps[c.snaps.length - 1];
+  check(s5 && s5.players.length === 1, `房主退出后剩 1 人（实际 ${s5 ? s5.players.length : 0}）`);
+  const cNow = s5 && s5.players[0];
+  const cPrev = cNow && cNow.x;
+  for (let i = 0; i < 12; i++) {
+    c.send({ t: 'input', up: false, down: false, left: false, right: true, firing: false, aimX: 0, aimY: 0 });
+    await sleep(50);
+  }
+  const cAfter = c.snaps[c.snaps.length - 1].players[0];
+  check(!!cAfter && cAfter.x !== cPrev, `房主退出后剩下的人接过房间照常移动（${cPrev} → ${cAfter ? cAfter.x : '?'}）`);
+  check(!!c.snaps[c.snaps.length - 1].me, '房主退出后仍能收到自己的背包快照');
 
   a.sock = null;
   console.log(failed === 0 ? '\n全部通过 ✔' : `\n${failed} 项失败 ✘`);

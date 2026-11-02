@@ -32,7 +32,8 @@ class Room {
     this.world = new Engine.World(freshMeta(), Date.now() % 100000);
     this.world.startRun(Date.now() % 100000);
     this.world.screen = 'playing';
-    this.members = []; // { conn, player }
+    this.members = []; // { conn, player, id }
+    this.nextSid = 1; // 座位号：只增不复用，退出重进也不会撞号
     this.mapDirty = true;
     this.snapTimer = 0;
     this.timer = null;
@@ -66,11 +67,13 @@ class Room {
     } else {
       player = w.addPlayer(name);
     }
-    player.id = this.members.length === 0 ? 0 : w.players.length - 1;
+    // 稳定的座位号：只增不复用，客户端靠它在快照里认出自己
+    player.sid = this.nextSid++;
     player.input = { up: false, down: false, left: false, right: false, firing: false, aimX: player.x + 40, aimY: player.y };
     player.down = false;
+    player.alive = true;
 
-    const member = { conn, player, id: this.members.length };
+    const member = { conn, player, id: player.sid };
     this.members.push(member);
     conn.data.member = member;
     conn.data.room = this;
@@ -92,14 +95,18 @@ class Room {
     if (!member) return;
     this.members = this.members.filter((m) => m !== member);
     const w = this.world;
-    if (member.id !== 0) {
-      // 不是房主：直接从世界摘掉
-      w.removePlayer(member.player);
+    const name = member.player.name || '有人';
+
+    if (member.player === w.player && this.members.length > 0) {
+      // 房主（0 号）走了但还有人：把下一个玩家提升为 0 号，
+      // 保证 engine 里的 this.player 始终指向 players 里有效的一员
+      w.players.splice(0, 1);
+      w.player = w.players[0];
     } else {
-      member.player.name = '';
-      member.player.alive = false;
+      w.removePlayer(member.player);
     }
-    this.broadcast({ t: 'sys', msg: `${member.player.name || '有人'} 离开了` });
+
+    this.broadcast({ t: 'sys', msg: `${name} 离开了` });
     if (!this.members.length) {
       this.stop();
       this.onEmpty(this);
@@ -233,9 +240,9 @@ class Room {
       pending: w.pending,
       pendingSkip: w.pendingSkip || false,
       shop: w.shop ? { stock: w.shop.stock } : null,
-      players: w.players.map((p, i) => ({
-        i,
-        name: p.name || (i === 0 ? '房主' : '队友'),
+      players: w.players.map((p) => ({
+        id: p.sid,
+        name: p.name || '队友',
         x: Math.round(p.x * 10) / 10,
         y: Math.round(p.y * 10) / 10,
         hp: Math.round(p.hp),
@@ -274,7 +281,7 @@ class Room {
 
     const body = JSON.stringify(snap);
     for (const m of this.members) {
-      const me = w.players[m.id];
+      const me = m.player; // 用引用，不用数组下标（有人退出后下标会变）
       // 自己那份额外带上背包与经验，做 HUD 用
       m.conn.send(
         body.slice(0, -1) +

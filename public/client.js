@@ -1052,6 +1052,7 @@ const NET = {
   me: null,
   sendTimer: 0,
   fovTimer: 0,
+  pool: new Map(), // sid → 复用的玩家对象（下标会因有人退出而变，必须按 id 认）
 };
 
 function netLog(msg) {
@@ -1106,6 +1107,7 @@ function handleNet(msg) {
   if (msg.t === 'welcome') {
     NET.id = msg.id;
     NET.on = true;
+    NET.pool.clear(); // 重新入房，之前缓存的玩家对象作废
     if (world) {
       world.screen = 'playing';
       world.paused = false;
@@ -1170,12 +1172,13 @@ function applyNetSnap(msg) {
   w.pendingSkip = msg.pendingSkip;
   w.shop = msg.shop;
 
-  // 玩家：按索引复用对象，避免每帧新建
-  msg.players.forEach((sp, i) => {
-    let p = w.players[i];
+  // 玩家：按稳定 id 复用对象（有人退出时数组下标会整体前移，不能按 i 认）
+  msg.players.forEach((sp) => {
+    let p = NET.pool.get(sp.id);
     if (!p) {
       p = w.makePlayer();
-      w.players[i] = p;
+      p.sid = sp.id;
+      NET.pool.set(sp.id, p);
     }
     p.x = sp.x;
     p.y = sp.y;
@@ -1189,8 +1192,8 @@ function applyNetSnap(msg) {
     p.moving = sp.moving;
     p.invuln = 0;
   });
-  w.players.length = msg.players.length;
-  w.player = w.players[NET.id] || w.players[0];
+  w.players = msg.players.map((sp) => NET.pool.get(sp.id));
+  w.player = NET.pool.get(NET.id) || w.players[0];
   NET.me = msg.me || null;
   if (msg.me && w.player) {
     const keep = { x: w.player.x, y: w.player.y, aim: w.player.aim, name: w.player.name };
