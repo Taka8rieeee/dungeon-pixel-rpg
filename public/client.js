@@ -1032,14 +1032,33 @@ function drawMinimap() {
   mctx.fillRect(Math.floor(p.x / 16) * MM_SCALE - 1, Math.floor(p.y / 16) * MM_SCALE - 1, MM_SCALE + 2, MM_SCALE + 2);
 }
 
-/** 联机：输名字后连服务器 */
+/** 联机：弹出昵称输入框（Electron 不支持 window.prompt，所以自己画一个） */
 function startNet() {
   if (!world) return;
-  const name = (prompt('你的名字（最多 8 个字）', '勇者') || '').trim().slice(0, 8);
-  if (!name) return;
-  connectNet(name);
-  world.addLog('正在连接服务器…');
-  lastOverlayKey = '';
+  const dlg = document.getElementById('netDialog');
+  if (!dlg) return;
+  dlg.classList.remove('hidden');
+  const nameEl = document.getElementById('netName');
+  nameEl.focus();
+  nameEl.select();
+}
+
+function closeNetDialog() {
+  const dlg = document.getElementById('netDialog');
+  if (dlg) dlg.classList.add('hidden');
+}
+
+/** 把用户填的服务器地址整理成 WebSocket URL */
+function resolveWsUrl(server) {
+  const raw = (server || '').trim().replace(/\/+$/, '');
+  if (!raw) {
+    return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
+  }
+  if (/^wss?:\/\//i.test(raw)) return raw.endsWith('/ws') ? raw : `${raw}/ws`;
+  const tls = /^https:\/\//i.test(raw) || (location.protocol === 'https:' && !/^http:\/\//i.test(raw));
+  const host = raw.replace(/^https?:\/\//i, '');
+  const base = `${tls ? 'wss' : 'ws'}://${host}`;
+  return base.endsWith('/ws') ? base : `${base}/ws`;
 }
 
 /* ---------------- 联机 ---------------- */
@@ -1060,9 +1079,8 @@ function netLog(msg) {
   world.addLog(msg);
 }
 
-function connectNet(name) {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const url = `${proto}://${location.host}/ws`;
+function connectNet(name, server) {
+  const url = resolveWsUrl(server);
   let ws;
   try {
     ws = new WebSocket(url);
@@ -1477,6 +1495,30 @@ overlay.addEventListener('click', (ev) => {
   else if (act === 'continue') world.continueRun();
   else if (act === 'retire') world.endRun();
   else if (act === 'leave') world.closeShop();
+});
+
+/* 联机昵称表单：提交后连服务器 */
+document.getElementById('netForm').addEventListener('submit', (ev) => {
+  ev.preventDefault();
+  const nameEl = document.getElementById('netName');
+  const serverEl = document.getElementById('netServer');
+  const name = (nameEl.value || '').trim().slice(0, 8) || '勇者';
+  const server = serverEl.value || '';
+  closeNetDialog();
+  connectNet(name, server);
+  if (world) {
+    world.addLog('正在连接服务器…');
+  }
+  lastOverlayKey = '';
+});
+
+document.getElementById('netCancel').addEventListener('click', closeNetDialog);
+
+document.getElementById('netServer').addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape') closeNetDialog();
+});
+document.getElementById('netName').addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape') closeNetDialog();
 });
 
 /* ---------------- 流程 ---------------- */

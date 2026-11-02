@@ -28,6 +28,19 @@
     <canvas id="minimap"></canvas>
 
     <div id="overlay" class="hidden"><div id="overlayInner"></div></div>
+    <!-- 联机昵称输入：Electron 内核不支持 window.prompt，必须自己画 -->
+    <div id="netDialog" class="hidden">
+      <form id="netForm" autocomplete="off">
+        <h2>联机同屏</h2>
+        <p class="net-hint">输入名字，最多 4 人一起下地牢</p>
+        <input id="netName" type="text" maxlength="8" placeholder="你的名字" value="勇者" />
+        <input id="netServer" type="text" placeholder="服务器地址（留空＝当前这台的服务器）" />
+        <div class="net-actions">
+          <button type="submit" class="net-primary">进入地牢</button>
+          <button type="button" id="netCancel">取消</button>
+        </div>
+      </form>
+    </div>
     <div id="crash" class="hidden"></div>
   </div>
 

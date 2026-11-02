@@ -16,7 +16,7 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
-const OUT = path.join(ROOT, 'release', '地牢像素RPG-win');
+const OUT = process.env.PKG_OUT || path.join(ROOT, 'release', '地牢像素RPG-win');
 const DIST = path.join(ROOT, 'node_modules', 'electron', 'dist');
 const APP = path.join(OUT, 'resources', 'app');
 

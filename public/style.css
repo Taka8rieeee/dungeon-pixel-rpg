@@ -630,3 +630,93 @@ h2 {
 .restart {
   margin-top: 1em;
 }
+
+/* ---------------- 联机昵称弹窗（替代 Electron 不支持的 prompt） ---------------- */
+
+#netDialog {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(4, 4, 8, 0.86);
+  padding: 1.2em;
+  z-index: 40;
+}
+
+#netForm {
+  width: min(21em, 100%);
+  background: #12141c;
+  border: 2px solid #2b3040;
+  border-radius: 0.5em;
+  padding: 1.4em 1.5em 1.2em;
+  text-align: center;
+  box-shadow: 0 1em 3em rgba(0, 0, 0, 0.6);
+}
+
+#netForm h2 {
+  margin: 0 0 0.3em;
+  font-size: 1.35em;
+  color: var(--gold);
+}
+
+.net-hint {
+  margin: 0 0 1em;
+  color: var(--dim);
+  font-size: 0.82em;
+}
+
+#netForm input {
+  width: 100%;
+  box-sizing: border-box;
+  margin-bottom: 0.6em;
+  padding: 0.55em 0.7em;
+  background: #0a0b10;
+  border: 2px solid #2b3040;
+  border-radius: 0.3em;
+  color: #e8eaf2;
+  font: inherit;
+  font-size: 0.95em;
+  outline: none;
+}
+
+#netForm input:focus {
+  border-color: #5b7cfa;
+}
+
+#netForm input::placeholder {
+  color: #4b5164;
+}
+
+#netServer {
+  font-size: 0.82em;
+  margin-bottom: 1em;
+}
+
+.net-actions {
+  display: flex;
+  gap: 0.6em;
+}
+
+.net-actions button {
+  flex: 1;
+  padding: 0.6em 0;
+  font: inherit;
+  font-size: 0.95em;
+  border-radius: 0.3em;
+  border: 2px solid #2b3040;
+  background: #1a1d28;
+  color: #cfd4e4;
+  cursor: pointer;
+}
+
+.net-actions button:hover {
+  border-color: #4a5268;
+}
+
+.net-primary {
+  background: var(--gold) !important;
+  border-color: var(--gold) !important;
+  color: #2a1e00 !important;
+  font-weight: bold;
+}

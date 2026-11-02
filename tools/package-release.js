@@ -17,7 +17,7 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT = path.join(__dirname, '..');
-const OUT = path.join(ROOT, 'release', '地牢像素RPG');
+const OUT = process.env.PKG_OUT || path.join(ROOT, 'release', '地牢像素RPG');
 
 // 游戏本体需要的文件，其余（docs/tools/.git/data…）都不进包
 const COPY_FILES = ['server.js', 'package.json', 'README.md'];
